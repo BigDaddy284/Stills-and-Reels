@@ -10,8 +10,9 @@
 ![.NET Framework 4.8](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)
 ![Version 2.2](https://img.shields.io/badge/version-2.2-7C5CFF)
 ![Offline](https://img.shields.io/badge/network-none-2EA043)
+[![Licence: GPLv3](https://img.shields.io/badge/licence-GPLv3-blue)](LICENSE)
 
-[What it is](#what-it-is) · [Features](#features) · [Download and run](#download-and-run) · [User guide](docs/GUIDE.md) · [Privacy](#your-files-stay-yours) · [Build from source](#building-from-source) · [Credits](#credits-and-licences)
+[What it is](#what-it-is) · [Features](#features) · [Download and run](#download-and-run) · [User guide](docs/GUIDE.md) · [Privacy](#your-files-stay-yours) · [Build from source](#building-from-source) · [Licence](#licence) · [Credits](#credits-and-licences)
 
 </div>
 
@@ -156,6 +157,16 @@ Stills & Reels was written with **[Anthropic's Claude](https://claude.ai/code)**
 
 - Every icon is a simple line drawing made in code.
 - The image effects use standard, published formulas rather than anyone's code: luma weights from ITU-R BT.709, YCbCr from ITU-R BT.601 (for chroma key), saturation and hue-rotation matrices in the style of the W3C Filter Effects specification, the common sepia matrix, and textbook box blur, unsharp mask and vignette techniques.
+
+## Licence
+
+Copyright © 2026 BigDaddy284.
+
+Stills & Reels is free software: you can redistribute it and/or modify it under the terms of the **[GNU General Public License version 3](LICENSE)**, or (at your option) any later version, as published by the Free Software Foundation. This is the same licence as the FFmpeg engine it bundles.
+
+In plain words: you can use, study, change and share Stills & Reels, and even sell it. But if you share or sell a version of it, changed or not, you must make its full source code available under the same GPLv3 licence, keep the copyright and licence notices, and pass on the same freedoms to everyone who gets it. Nobody can take this code, close it up and sell it as their own.
+
+Stills & Reels comes **without any warranty**. See [LICENSE](LICENSE) for the full terms.
 
 ## Credits and licences
 
