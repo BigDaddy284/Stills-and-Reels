@@ -39,7 +39,7 @@ It used to be called **Picture Preview**. Version 2.2 is the first under the new
 > - **Video quality can drop.** Every export and screen recording is re-compressed, so a video that goes through the editor won't look quite as sharp as the original, and quality drops a little more each time a video is exported again. For the best results, export once from your original files at the highest quality you need.
 > - **It isn't a professional tool.** It's built for quick, everyday edits, not for work where every frame matters.
 >
-> Found a bug or have an idea? Please open an [issue](../../issues). There's no promise of fixes or updates, but reports are welcome.
+> **It's offered as it is.** It's finished as far as its author is concerned: there's no support, and no bug fixes or updates are planned. If you'd like to take it further, the licence lets you fork it and make it your own.
 
 ## Features
 
