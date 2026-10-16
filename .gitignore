@@ -1,0 +1,5 @@
+# build output
+build/
+*.res
+# the bundled FFmpeg engine is not kept in the repo (see BUILD NOTES.txt)
+engine/

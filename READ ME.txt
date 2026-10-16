@@ -1,0 +1,225 @@
+Stills & Reels 2.2
+==================
+(formerly Picture Preview)
+
+1. Right-click StillsAndReels.zip > Extract All...
+2. Double-click StillsAndReels.exe. There's nothing to install.
+3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
+   (This appears because the app isn't code-signed.)
+
+What's new in 2.2
+- The app is now called Stills & Reels.
+- Your settings carry over from Picture Preview automatically on first run.
+- The old Picture Preview video engine and cache folders are cleaned up on first run
+  (as long as the old app isn't open), so you don't keep two copies of the engine.
+- Video projects now save as .srproj. Your existing .ppvproj projects still open,
+  and saving one keeps its original name and extension.
+- You can delete the old StillsAndReels.exe once you're happy with the new one.
+
+What's new in 2.1
+- Pasting into Edit picture (like paint.net): Ctrl+V or the Paste button in the sidebar.
+  The picture floats as a layer: drag it, drag its handles to resize, press Enter or click
+  outside to place it, or press Esc to cancel. With no picture open, Ctrl+V starts a new picture.
+  Ctrl+Alt+V always pastes as a new picture.
+- Snip copies every capture to the clipboard straight away, and has a
+  "Paste into editor" button (Ctrl+E) that drops the snip into Edit picture.
+- Edit > Edit video (Ctrl+Shift+E), or the Edit button next to Videos: the video editor.
+  A video playing in the viewer goes straight onto the timeline.
+- Edit > Video snip (Ctrl+Alt+R), or Snip next to the video Edit button: screen recording.
+
+Video editor at a glance
+- Left: Media (import, or click videos in File Explorer), Text, Transitions, Filters, Effects.
+- Centre: preview. Drag the selected clip to move it, drag a corner to resize,
+  drag the round handle to rotate.
+- Right: properties of the selected clip (Basic, Adjust, Effects, Audio, Speed or Text).
+- Bottom: timeline. Drag clips to move them (also onto a new track), drag their ends to trim.
+  Space plays, Ctrl+B splits, Del deletes, Shift+Del deletes and closes the gap,
+  Ctrl+D duplicates, Ctrl+K adds a keyframe, Ctrl+wheel zooms, Ctrl+Z undoes.
+- File > Save video project (Ctrl+S) saves a .srproj file. It remembers where your files are.
+  Older .ppvproj projects also open.
+- Export (top right, or Ctrl+M): MP4 (H.264 + AAC) at 480p-4K, 24-60 fps, or MP3 sound only.
+
+The media cache
+- Every video you view (and every file you import) is copied into a private cache folder
+  for the editor. Copies stay until you remove them from Media or close the app, then
+  they are deleted. You can turn off keeping viewed videos in Settings.
+- Recordings, freeze frames and pasted pictures also live in the cache. When you save a
+  project, they are copied into a "<project name> media" folder next to it.
+
+Privacy
+- Pictures are read from a temporary copy that's deleted when you move on.
+- Edits, snips, recordings and exports are only ever saved as new files.
+  Originals are never changed or overwritten.
+- Nothing is sent anywhere. The app has no network code.
+
+Video engine
+The first time you use a video feature, the app unpacks its built-in video engine (FFmpeg 7.1)
+to %LOCALAPPDATA%\StillsAndReels\Engine (about 85 MB, takes a few seconds, once only).
+The app starts it in the background; you never run it yourself. It is only given local
+file paths (and, when you record, your screen and the microphone you choose), so it never
+uses the network. To remove it, delete that folder.
+
+
+===========================================================================================
+CREDITS AND LICENCES
+===========================================================================================
+
+Stills & Reels' own code
+------------------------
+The application code (C#, about 17,000 lines) was written for you by Claude (Anthropic's
+AI assistant) during this project. No source code, icons or other assets were copied from
+any other project, repository or product:
+- All icons are simple line drawings made in code.
+- The look follows the reference image you supplied.
+- The image effects use standard, published formulas rather than anyone's code:
+  luma weights from ITU-R BT.709, the YCbCr conversion from ITU-R BT.601 (chroma key),
+  saturation and hue-rotation matrices in the style of the W3C Filter Effects specification
+  (feColorMatrix), the widely used sepia colour matrix, and textbook box blur, unsharp
+  mask and vignette techniques.
+
+
+1. Third-party software INCLUDED in StillsAndReels.exe
+------------------------------------------------------
+
+FFmpeg 7.1 ("essentials" build for Windows 64-bit)
+  What it does here: decodes and plays video and sound, makes thumbnails and waveforms,
+                     encodes exports, and records the screen.
+  Authors:           the FFmpeg developers - https://ffmpeg.org
+  This build:        compiled by Gyan Doshi - https://www.gyan.dev/ffmpeg/builds/
+                     (builds also published at https://github.com/GyanD/codexffmpeg)
+  Obtained from:     the imageio-ffmpeg 0.6.0 package for Windows (see below), which ships
+                     this build unchanged. Stills & Reels embeds it unchanged and checks it
+                     with a SHA-256 checksum.
+  SHA-256:           2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3
+  Licence:           GNU General Public License version 3 (GPLv3). The build is configured
+                     with --enable-gpl --enable-version3, so the whole ffmpeg.exe is covered by
+                     the GPLv3. The full text is at https://www.gnu.org/licenses/gpl-3.0.html
+  Source code:       FFmpeg 7.1 source: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
+                     The builder's page above lists the exact source versions of every library
+                     compiled in.
+  How it is used:    FFmpeg runs as a separate program (its own ffmpeg.exe process), controlled
+                     through command-line options and data pipes. It is not linked into Picture
+                     Preview's code. Running a GPL program as a separate process like this is
+                     generally treated as "aggregation", which does not put the rest of the
+                     application under the GPL.
+  You are free to:   use, copy, study, change and share FFmpeg under the GPLv3. If you pass this
+                     app on to other people, the GPLv3 requires that they can also get FFmpeg's
+                     source code (for example, by keeping the links above in this file) and this
+                     licence notice. It comes WITHOUT ANY WARRANTY.
+
+  Libraries compiled into that FFmpeg build, with their licences:
+    x264 (H.264 video encoder) ............ GPL v2 or later
+    x265 (H.265/HEVC encoder) ............. GPL v2 or later
+    Xvid (MPEG-4 encoder) ................. GPL v2 or later
+    vid.stab (video stabilisation) ........ GPL v2 or later
+    Rubber Band (audio time-stretching) ... GPL v2 or later
+    LAME (MP3 encoder) .................... LGPL v2 or later
+    libaom (AV1) .......................... BSD 2-Clause + Alliance for Open Media Patent Licence 1.0
+    libvpx (VP8/VP9) ...................... BSD 3-Clause (+ WebM patent grant)
+    libwebp ............................... BSD 3-Clause
+    OpenJPEG (JPEG 2000) .................. BSD 2-Clause
+    Opus .................................. BSD 3-Clause
+    Vorbis, Theora (Xiph.Org) ............. BSD 3-Clause
+    Speex ................................. BSD 3-Clause
+    libgsm ................................ permissive (Jutta Degener & Carsten Bormann, TU Berlin)
+    OpenCORE AMR, VisualOn AMR-WB enc ..... Apache License 2.0
+    libass (subtitles) .................... ISC
+    FreeType .............................. FreeType License (or GPL v2)
+    FriBidi ............................... LGPL v2.1 or later
+    HarfBuzz .............................. MIT ("Old MIT")
+    Fontconfig ............................ MIT-style
+    libxml2 ............................... MIT
+    GnuTLS ................................ LGPL v2.1 or later
+    GMP ................................... LGPL v3 or later (or GPL v2 or later)
+    libiconv .............................. LGPL
+    zlib .................................. zlib licence
+    bzip2 ................................. bzip2 licence (BSD-style)
+    XZ Utils / liblzma .................... 0BSD / public domain
+    SRT (Secure Reliable Transport) ....... Mozilla Public License 2.0
+    libssh ................................ LGPL v2.1
+    ZeroMQ (libzmq) ....................... Mozilla Public License 2.0
+    SDL2 .................................. zlib licence
+    zimg (scaling) ........................ WTFPL
+    libvmaf (Netflix) ..................... BSD-2-Clause-Patent
+    Game Music Emu ........................ LGPL v2.1 or later
+    libopenmpt ............................ BSD 3-Clause
+    oneVPL (Intel video acceleration) ..... MIT
+    nv-codec-headers (NVIDIA) ............. MIT
+    AMD AMF headers ....................... MIT
+    AviSynth headers ...................... GPL v2 or later with linking exception
+  The build also uses Windows and graphics-driver interfaces (Media Foundation, DXVA2,
+  D3D11VA, D3D12VA, NVENC/NVDEC). These belong to Windows and the driver makers; their code is
+  not included. Stills & Reels only uses FFmpeg's own decoders and encoders, plus
+  x264, LAME, the AAC encoder, gdigrab and dshow.
+
+  Patent notice: some formats (for example H.264, H.265, AAC and MP3 in some countries) may be
+  covered by patents. These software licences are copyright licences only and don't grant
+  patent rights. Personal, non-commercial use is generally not a concern, but if you plan to
+  sell or distribute videos or software commercially, check what applies where you live.
+
+imageio-ffmpeg 0.6.0 (source of the FFmpeg binary above)
+  Authors:  imageio contributors - https://github.com/imageio/imageio-ffmpeg
+  Licence:  BSD 2-Clause. Only the ffmpeg.exe file from this package is used. None of its
+            Python code is included. Its licence notice is reproduced here, as the BSD
+            licence requires:
+
+    BSD 2-Clause License
+    Copyright (c) 2019-2025, imageio
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without modification, are
+    permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright notice, this list of
+      conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright notice, this list of
+      conditions and the following disclaimer in the documentation and/or other materials
+      provided with the distribution.
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+    COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
+    TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+2. Parts of Windows the app uses (NOT included - already on your PC)
+--------------------------------------------------------------------
+- Microsoft .NET Framework 4.8 and Windows Forms / GDI+ (the app is built on these).
+- Windows system libraries: winmm (sound output), dwmapi (dark title bar), uxtheme
+  (dark scroll bars), user32 (windows, clipboard, keeping the recording bar out of
+  recordings), kernel32 (job object that closes FFmpeg with the app), and the
+  Shell.Application COM interface (reading the File Explorer selection).
+- System fonts such as Segoe UI and Segoe UI Variable, and any other fonts you pick for text.
+  These are covered by your Windows licence (Microsoft Software License Terms). No fonts are
+  bundled with the app.
+
+
+3. Tools used to BUILD and TEST the app (NOT included in the download)
+---------------------------------------------------------------------
+These were used on the build machine only. No part of them ships inside StillsAndReels.exe,
+so their licences don't apply to the app itself:
+- Mono C# compiler (mcs) and .NET Framework 4.8 reference assemblies from the Mono project
+  (MIT licence) - https://www.mono-project.com
+- GNU windres from MinGW-w64 / GNU Binutils and the GNU C preprocessor (GPL v3) - used only
+  to compile the icon and version resource. The GPL doesn't cover the output of these tools.
+- FFmpeg for Linux (Ubuntu package), Xvfb (X.Org, MIT licence), xdotool (BSD 3-Clause),
+  ImageMagick (ImageMagick licence) and Python (PSF licence) - used only for automated tests
+  and screenshots.
+
+
+4. Inspiration only (no code, assets or branding used)
+------------------------------------------------------
+The layout and workflows were modelled on familiar apps you named as examples: CapCut
+(ByteDance) for the video editor, paint.net (dotPDN LLC) for pasting as a layer, and the
+Windows Snip & Sketch / Snipping Tool (Microsoft) for snipping. Stills & Reels contains none
+of their code, artwork, icons or names in its interface. CapCut, paint.net, Windows, Snip &
+Sketch, Segoe and other names mentioned here are trademarks of their owners. Stills & Reels
+is not affiliated with or endorsed by them.
+
+
+Disclaimer: this summary is provided for convenience and is not legal advice. The licence
+texts linked above are what actually apply. Stills & Reels is provided "as is", without
+warranty of any kind.
