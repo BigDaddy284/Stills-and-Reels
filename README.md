@@ -12,7 +12,7 @@
 ![Offline](https://img.shields.io/badge/network-none-2EA043)
 [![Licence: GPLv3](https://img.shields.io/badge/licence-GPLv3-blue)](LICENSE)
 
-[What it is](#what-it-is) · [Features](#features) · [Download and run](#download-and-run) · [User guide](docs/GUIDE.md) · [Privacy](#your-files-stay-yours) · [Build from source](#building-from-source) · [Licence](#licence) · [Credits](#credits-and-licences)
+[What it is](#what-it-is) · [Hobby project](#a-hobby-project) · [Features](#features) · [Download and run](#download-and-run) · [User guide](docs/GUIDE.md) · [Privacy](#your-files-stay-yours) · [Build from source](#building-from-source) · [Licence](#licence) · [Credits](#credits-and-licences)
 
 </div>
 
@@ -29,6 +29,17 @@
 - **Completely offline.** The app has no network code. Nothing is uploaded and nothing is sent anywhere.
 
 It used to be called **Picture Preview**. Version 2.2 is the first under the new name, and your settings carry over automatically.
+
+## A hobby project
+
+> [!NOTE]
+> Stills & Reels is a **hobby project**, made in spare time by one person with the help of an AI coding assistant. It's shared for free in the hope that it's useful, but please go in with your eyes open:
+>
+> - **There will be bugs.** It has been tested, but not on every PC, screen setup or file type. Keep backups of anything important (your originals are never changed, but projects and new files can be).
+> - **Video quality can drop.** Every export and screen recording is re-compressed, so a video that goes through the editor won't look quite as sharp as the original, and quality drops a little more each time a video is exported again. For the best results, export once from your original files at the highest quality you need.
+> - **It isn't a professional tool.** It's built for quick, everyday edits, not for work where every frame matters.
+>
+> Found a bug or have an idea? Please open an [issue](../../issues). There's no promise of fixes or updates, but reports are welcome.
 
 ## Features
 
