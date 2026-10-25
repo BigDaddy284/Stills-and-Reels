@@ -16,14 +16,15 @@ namespace StillsAndReels
     /// Picks up pictures and files clicked in other apps. A low-level mouse hook only watches left clicks
     /// (it never blocks or changes them); the work happens on a separate STA thread so a slow app can't
     /// hold up the mouse.
-    ///  - Pictures: on button-down the accessibility element under the cursor is checked. If it is a picture
-    ///    (an &lt;img&gt; on a web page, a picture in another desktop app), the part of it that is on screen is
-    ///    copied from the screen. It is handed over on button-up, and only if the mouse didn't move (so drags
+    ///  - Pictures: on button-down the screen under the cursor is copied and the picture there is found
+    ///    (see FindPicture: accessibility first, then what the screen shows). The part of it that is on screen is
+    ///    kept. It is handed over on button-up, and only if the mouse didn't move (so drags
     ///    and text selection are left alone). Nothing is downloaded: what you get is what was on screen.
     ///  - Files: on button-up, the clicked item in an Open/Save dialog or another app's file list is turned
     ///    into a path (full path in the item's text, or the item's name plus the folder in the window's
     ///    address bar or title). Only files that exist on a local drive are reported.
-    /// File Explorer windows and the desktop are left to ExplorerWatcher, which reads their real selection.
+    /// File Explorer windows are left to ExplorerWatcher, which reads their real selection. The desktop is read by
+    /// both: ExplorerWatcher reads its selection, and clicks on its icons are matched to the Desktop folders here.
     /// </summary>
     internal sealed class PickupWatcher : IDisposable
     {
@@ -86,7 +87,7 @@ namespace StillsAndReels
         void HookLoop()
         {
             try { RunHook(); }
-            catch { }   // no hook (e.g. blocked by security software): pick-up from other apps just stays off
+            catch (Exception ex) { PickupLog.Write("mouse hook failed: " + ex.GetType().Name + " " + ex.Message); }   // no hook (e.g. blocked by security software): pick-up from other apps just stays off
         }
 
         void RunHook()
@@ -95,7 +96,8 @@ namespace StillsAndReels
             hookThreadId = GetCurrentThreadId();
             proc = HookCallback;
             hook = SetWindowsHookEx(WH_MOUSE_LL, proc, GetModuleHandle(null), 0);
-            if (hook == IntPtr.Zero) return;
+            if (hook == IntPtr.Zero) { PickupLog.Write("mouse hook could not be installed, error " + Marshal.GetLastWin32Error()); return; }
+            PickupLog.Write("mouse hook installed");
             MSG msg;
             while (running && GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
             {
@@ -150,7 +152,7 @@ namespace StillsAndReels
                     {
                         if (c.Down) OnDown(c); else OnUp(c);
                     }
-                    catch { DropPending(); }
+                    catch (Exception ex) { PickupLog.Write("error: " + ex.GetType().Name + " " + ex.Message); DropPending(); }
                 }
             }
             DropPending();
@@ -167,18 +169,32 @@ namespace StillsAndReels
             downPt = c.Pt;
             downTime = c.Time;
             if (!WantPictures) return;
-            if (Environment.TickCount - c.Time > MaxClickMs) return;   // too stale: the page may have changed
+            if (Environment.TickCount - c.Time > MaxClickMs) { PickupLog.Write("picture: click skipped, worker was busy"); return; }
             IntPtr root;
             if (!IsForeignWindow(c.Pt, out root) || IsShellWindow(root)) return;
-            string name;
-            Rectangle r = FindPicture(c.Pt, out name);
-            if (r.Width < MinPictureSize || r.Height < MinPictureSize) return;
-            r = VisiblePart(r, root);
-            if (r.Width < MinPictureSize / 2 || r.Height < MinPictureSize / 2) return;
-            var bmp = new Bitmap(r.Width, r.Height, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Location, Point.Empty, r.Size, CopyPixelOperation.SourceCopy);
-            pending = bmp;
-            pendingName = PictureName(name, root);
+            string cls = NativeMethods.ClassName(root);
+
+            // Copy what is on screen first, before the app reacts to the click (a link starts loading another page).
+            Rectangle area = VisiblePart(MonitorAt(c.Pt), root);
+            if (area.Width < MinPictureSize || area.Height < MinPictureSize) return;
+            using (var shot = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
+            {
+                using (var g = Graphics.FromImage(shot)) g.CopyFromScreen(area.Location, Point.Empty, area.Size, CopyPixelOperation.SourceCopy);
+
+                string name, how;
+                Rectangle r = FindPicture(c.Pt, cls, area, shot, out name, out how);
+                if (r.IsEmpty)
+                {
+                    PickupLog.Write("picture: nothing found in " + cls + " (" + ProcessName(root) + ") at " + c.Pt.X + "," + c.Pt.Y + ": " + how);
+                    return;
+                }
+                r.Intersect(area);
+                if (r.Width < MinPictureSize / 2 || r.Height < MinPictureSize / 2) return;
+                var crop = new Rectangle(r.X - area.X, r.Y - area.Y, r.Width, r.Height);
+                pending = shot.Clone(crop, PixelFormat.Format32bppArgb);
+                pendingName = PictureName(name, root);
+                PickupLog.Write("picture: " + how + " in " + cls + " (" + ProcessName(root) + "), " + r.Width + "x" + r.Height);
+            }
         }
 
         void OnUp(Click c)
@@ -190,7 +206,11 @@ namespace StillsAndReels
                 var bmp = pending;
                 pending = null;
                 long hash = Hash(bmp);
-                if (!isClick || !WantPictures || hash == lastHash) { bmp.Dispose(); }
+                if (!isClick || !WantPictures || hash == lastHash)
+                {
+                    PickupLog.Write(!isClick ? "picture: dropped, the mouse moved (drag)" : hash == lastHash ? "picture: same as last time" : "picture: dropped, pick-up switched off");
+                    bmp.Dispose();
+                }
                 else
                 {
                     lastHash = hash;
@@ -201,11 +221,16 @@ namespace StillsAndReels
             }
             if (!isClick || !WantFiles) return;
             IntPtr root;
-            if (!IsForeignWindow(c.Pt, out root) || IsShellWindow(root)) return;
+            if (!IsForeignWindow(c.Pt, out root)) return;
+            bool desktop = IsDesktop(root);
+            if (!desktop && IsShellWindow(root)) return;
             Thread.Sleep(80);   // let the app update its selection first
             bool videos = WantVideos;
             FileKind kind;
-            string path = FindFile(c.Pt, root, videos, out kind);
+            // The desktop's own selection is also read by ExplorerWatcher; this is the backup for when that
+            // isn't available (it reads the clicked icon's name against the Desktop folders, OneDrive's included).
+            string path = desktop ? FindDesktopFile(c.Pt, videos, out kind) : FindFile(c.Pt, root, videos, out kind);
+            PickupLog.Write("file: " + (desktop ? "desktop" : NativeMethods.ClassName(root) + " (" + ProcessName(root) + ")") + " -> " + (path ?? "no " + (videos ? "video" : "picture") + " file found"));
             if (path == null) return;
             var fh = FileClicked;
             if (fh != null) fh(path, kind);
@@ -225,6 +250,23 @@ namespace StillsAndReels
             return pid != 0 && pid != ownPid;
         }
 
+        static bool IsDesktop(IntPtr root)
+        {
+            string c = NativeMethods.ClassName(root);
+            return c == "Progman" || c == "WorkerW";
+        }
+
+        static string ProcessName(IntPtr hwnd)
+        {
+            try
+            {
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+                using (var p = Process.GetProcessById((int)pid)) return p.ProcessName;
+            }
+            catch { return "?"; }
+        }
+
         /// <summary>File Explorer and the desktop (read properly by ExplorerWatcher), the taskbar, Start, task switcher.</summary>
         static bool IsShellWindow(IntPtr root)
         {
@@ -239,6 +281,16 @@ namespace StillsAndReels
             return false;
         }
 
+        /// <summary>The screen (monitor) the point is on, in real pixels.</summary>
+        static Rectangle MonitorAt(Point pt)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            IntPtr mon = MonitorFromPoint(pt, 2 /* MONITOR_DEFAULTTONEAREST */);
+            if (mon != IntPtr.Zero && GetMonitorInfo(mon, ref mi))
+                return Rectangle.FromLTRB(mi.rcMonitor.Left, mi.rcMonitor.Top, mi.rcMonitor.Right, mi.rcMonitor.Bottom);
+            return Rectangle.FromLTRB(pt.X - 1500, pt.Y - 1500, pt.X + 1500, pt.Y + 1500);
+        }
+
         static Rectangle VisiblePart(Rectangle r, IntPtr root)
         {
             RECT wr;
@@ -250,33 +302,176 @@ namespace StillsAndReels
 
         // ------------------------------------------------------------------ pictures
 
-        /// <summary>Finds a picture element at the point: the hit element, its parents, or (for a link around a picture) its children.</summary>
-        static Rectangle FindPicture(Point pt, out string name)
+        /// <summary>
+        /// Finds the picture under the point, in this order:
+        ///  1. an accessibility "graphic" (an &lt;img&gt;, a picture in an app): the hit element, its children or parents.
+        ///     Browsers build their accessibility tree only once something asks for it, so for a browser the
+        ///     question is asked again a few times while the tree appears.
+        ///  2. the clicked element itself (a link, tile or button around a picture the page hides from
+        ///     accessibility, as photo sites and OneDrive do) when what it shows on screen looks like a photo.
+        ///  3. no usable accessibility at all: the picture-like block around the point, found from the screen copy.
+        /// </summary>
+        static Rectangle FindPicture(Point pt, string cls, Rectangle area, Bitmap shot, out string name, out string how)
         {
-            name = null;
+            name = null; how = "";
+            bool browser = cls.StartsWith("Chrome_WidgetWin", StringComparison.Ordinal) || cls == "MozillaWindowClass"
+                           || cls == "ApplicationFrameWindow" || cls.StartsWith("WebView", StringComparison.Ordinal);
+            var boxes = new List<Rectangle>();
+            int tries = browser ? 4 : 1;
+            for (int attempt = 0; attempt < tries; attempt++)
+            {
+                if (attempt > 0) Thread.Sleep(120);
+                boxes.Clear();
+                Rectangle r = AccessiblePicture(pt, boxes, out name, out how);
+                if (r.Width >= MinPictureSize && r.Height >= MinPictureSize) { how = "graphic" + (attempt > 0 ? " (try " + (attempt + 1) + ")" : ""); return r; }
+                if (boxes.Count > 0 && !browser) break;
+                if (boxes.Count > 1) break;   // the page's tree is there; the picture just isn't marked as one
+            }
+            // 2. elements around the point, smallest first, that look like a photo on screen
+            boxes.Sort((a, b) => (a.Width * a.Height).CompareTo(b.Width * b.Height));
+            long maxArea = (long)area.Width * area.Height * 6 / 10;
+            foreach (var b in boxes)
+            {
+                if (b.Width < 64 || b.Height < 64 || (long)b.Width * b.Height > maxArea || !b.Contains(pt)) continue;
+                var vis = Rectangle.Intersect(b, area);
+                if (vis.Width < 64 || vis.Height < 64) continue;
+                if (LooksLikePhoto(shot, new Rectangle(vis.X - area.X, vis.Y - area.Y, vis.Width, vis.Height)))
+                {
+                    how += "; element that looks like a photo";
+                    name = null;
+                    return b;
+                }
+            }
+            // 3. from the pixels
+            var local = PictureBlock(shot, new Point(pt.X - area.X, pt.Y - area.Y));
+            if (!local.IsEmpty && (long)local.Width * local.Height <= (long)area.Width * area.Height * 8 / 10
+                && LooksLikePhoto(shot, local))
+            {
+                how += "; picture found on screen";
+                name = null;
+                return new Rectangle(local.X + area.X, local.Y + area.Y, local.Width, local.Height);
+            }
+            how += "; " + boxes.Count + " elements, none like a picture";
+            return Rectangle.Empty;
+        }
+
+        /// <summary>Accessibility pass: returns a graphic's box, and collects the boxes of the elements around the point.</summary>
+        static Rectangle AccessiblePicture(Point pt, List<Rectangle> boxes, out string name, out string how)
+        {
+            name = null; how = "";
             IAccessible acc; object child;
-            if (AccessibleObjectFromPoint(new POINT { X = pt.X, Y = pt.Y }, out acc, out child) != 0 || acc == null) return Rectangle.Empty;
+            int hr = AccessibleObjectFromPoint(new POINT { X = pt.X, Y = pt.Y }, out acc, out child);
+            if (hr != 0 || acc == null) { how = "no accessibility (0x" + hr.ToString("X8") + ")"; return Rectangle.Empty; }
             try
             {
                 Rectangle r;
+                how = "hit " + RoleName(acc, child);
                 if (IsPictureAt(acc, child, pt, out r, out name)) return r;
+                AddBox(acc, child, boxes);
                 if (IsSelf(child))
                 {
-                    if (PictureChild(acc, pt, out r, out name)) return r;
+                    if (PictureChild(acc, pt, 2, out r, out name)) return r;
                 }
                 else if (IsPictureAt(acc, 0, pt, out r, out name)) return r;
                 IAccessible p = acc;
-                for (int up = 0; up < 2; up++)
+                for (int up = 0; up < 4; up++)
                 {
                     object parent = null;
                     try { parent = p.accParent; } catch { }
                     p = parent as IAccessible;
                     if (p == null) break;
                     if (IsPictureAt(p, 0, pt, out r, out name)) return r;
+                    AddBox(p, 0, boxes);
                 }
             }
             catch { }
             return Rectangle.Empty;
+        }
+
+        static void AddBox(IAccessible acc, object child, List<Rectangle> boxes)
+        {
+            try
+            {
+                int l, t, w, h;
+                acc.accLocation(out l, out t, out w, out h, child ?? 0);
+                if (w > 0 && h > 0) boxes.Add(new Rectangle(l, t, w, h));
+            }
+            catch { }
+        }
+
+        static string RoleName(IAccessible acc, object child)
+        {
+            try { object r = acc.get_accRole(child ?? 0); return r is int ? "role 0x" + ((int)r).ToString("X") : "role ?"; }
+            catch { return "role ?"; }
+        }
+
+        /// <summary>
+        /// True when an area of the screen copy looks like a photo or picture rather than text or plain UI:
+        /// many different colours and no single colour (a page background) covering most of it.
+        /// </summary>
+        internal static bool LooksLikePhoto(Bitmap bmp, Rectangle r)
+        {
+            r.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height));
+            if (r.Width < 16 || r.Height < 16) return false;
+            var counts = new Dictionary<int, int>();
+            int n = 0;
+            const int grid = 40;
+            for (int gy = 0; gy < grid; gy++)
+                for (int gx = 0; gx < grid; gx++)
+                {
+                    int x = r.X + (int)((gx + 0.5) * r.Width / grid), y = r.Y + (int)((gy + 0.5) * r.Height / grid);
+                    int c = bmp.GetPixel(x, y).ToArgb();
+                    int q = ((c >> 19) & 0x1F) << 10 | ((c >> 11) & 0x1F) << 5 | ((c >> 3) & 0x1F);   // 5 bits per channel
+                    int v; counts.TryGetValue(q, out v); counts[q] = v + 1; n++;
+                }
+            int top = 0;
+            foreach (var v in counts.Values) if (v > top) top = v;
+            return counts.Count >= 120 && top * 100 / n < 35;
+        }
+
+        /// <summary>
+        /// The block of busy (non-plain) pixels around a point: grows a box outwards until each side meets a plain
+        /// line (the page background or the gap between pictures). Empty when the point is on a plain area.
+        /// </summary>
+        internal static Rectangle PictureBlock(Bitmap bmp, Point p)
+        {
+            const int seed = 20, limit = 4000;
+            if (p.X < 0 || p.Y < 0 || p.X >= bmp.Width || p.Y >= bmp.Height) return Rectangle.Empty;
+            int l = Math.Max(0, p.X - seed), t = Math.Max(0, p.Y - seed);
+            int r = Math.Min(bmp.Width - 1, p.X + seed), b = Math.Min(bmp.Height - 1, p.Y + seed);
+            var data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                int stride = data.Stride / 4;
+                var px = new int[stride * bmp.Height];
+                Marshal.Copy(data.Scan0, px, 0, px.Length);
+                Func<int, int, int, int, bool> plain = (x0, y0, x1, y1) =>
+                {
+                    // a line is plain when 97% of it matches its first pixel (within 12 per channel)
+                    int first = px[y0 * stride + x0], total = 0, same = 0;
+                    for (int y = y0; y <= y1; y++)
+                        for (int x = x0; x <= x1; x++)
+                        {
+                            int c = px[y * stride + x];
+                            total++;
+                            if (Math.Abs(((c >> 16) & 255) - ((first >> 16) & 255)) <= 12 && Math.Abs(((c >> 8) & 255) - ((first >> 8) & 255)) <= 12
+                                && Math.Abs((c & 255) - (first & 255)) <= 12) same++;
+                        }
+                    return same * 100 >= total * 97;
+                };
+                if (plain(l, t, r, b)) return Rectangle.Empty;   // clicked on plain background
+                for (int i = 0; i < limit; i++)
+                {
+                    bool grew = false;
+                    if (l > 0 && !plain(l - 1, t, l - 1, b)) { l--; grew = true; }
+                    if (r < bmp.Width - 1 && !plain(r + 1, t, r + 1, b)) { r++; grew = true; }
+                    if (t > 0 && !plain(l, t - 1, r, t - 1)) { t--; grew = true; }
+                    if (b < bmp.Height - 1 && !plain(l, b + 1, r, b + 1)) { b++; grew = true; }
+                    if (!grew) break;
+                }
+                return Rectangle.FromLTRB(l, t, r + 1, b + 1);
+            }
+            finally { bmp.UnlockBits(data); }
         }
 
         static bool IsSelf(object child)
@@ -301,12 +496,12 @@ namespace StillsAndReels
             catch { return false; }
         }
 
-        static bool PictureChild(IAccessible acc, Point pt, out Rectangle r, out string name)
+        static bool PictureChild(IAccessible acc, Point pt, int depth, out Rectangle r, out string name)
         {
             r = Rectangle.Empty; name = null;
             int count;
             try { count = acc.accChildCount; } catch { return false; }
-            if (count <= 0 || count > 30) return false;
+            if (count <= 0 || count > 40) return false;
             var kids = new object[count];
             int got;
             if (AccessibleChildren(acc, 0, count, kids, out got) != 0) return false;
@@ -315,8 +510,20 @@ namespace StillsAndReels
                 var k = kids[i] as IAccessible;
                 bool hit = k != null ? IsPictureAt(k, 0, pt, out r, out name) : kids[i] is int && IsPictureAt(acc, kids[i], pt, out r, out name);
                 if (hit) return true;
+                if (k != null && depth > 1 && Contains(k, pt) && PictureChild(k, pt, depth - 1, out r, out name)) return true;
             }
             return false;
+        }
+
+        static bool Contains(IAccessible acc, Point pt)
+        {
+            try
+            {
+                int l, t, w, h;
+                acc.accLocation(out l, out t, out w, out h, 0);
+                return new Rectangle(l, t, w, h).Contains(pt);
+            }
+            catch { return false; }
         }
 
         static string PictureName(string alt, IntPtr root)
@@ -403,6 +610,46 @@ namespace StillsAndReels
                 }
             }
             return null;
+        }
+
+        /// <summary>The desktop icon under the point, found by its name in the Desktop folders (yours, OneDrive's and Public).</summary>
+        static string FindDesktopFile(Point pt, bool videos, out FileKind kind)
+        {
+            kind = FileKind.Other;
+            var texts = new List<string>();
+            IAccessible acc; object child;
+            if (AccessibleObjectFromPoint(new POINT { X = pt.X, Y = pt.Y }, out acc, out child) != 0 || acc == null) return null;
+            try
+            {
+                if (!IsItemRole(acc, child)) return null;   // clicked the wallpaper, not an icon
+                AddTexts(acc, child, texts);
+            }
+            catch { return null; }
+            foreach (var dir in DesktopFolders())
+                foreach (var t in texts)
+                {
+                    string n = t.Trim();
+                    if (n.Length == 0 || n.Length > 255 || n.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) continue;
+                    string found = InFolder(dir, n, videos, out kind);
+                    if (found != null) return found;
+                }
+            return null;
+        }
+
+        internal static List<string> DesktopFolders()
+        {
+            var list = new List<string>();
+            Action<string> add = d => { if (!string.IsNullOrEmpty(d) && SafeDirExists(d) && !list.Contains(d)) list.Add(d); };
+            add(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));   // follows OneDrive's Desktop backup
+            add(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory));
+            foreach (var v in new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
+            {
+                string od = Environment.GetEnvironmentVariable(v);
+                if (!string.IsNullOrEmpty(od)) add(Path.Combine(od, "Desktop"));
+            }
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(profile)) add(Path.Combine(profile, "Desktop"));
+            return list;
         }
 
         static bool IsItemRole(IAccessible acc, object child)
@@ -610,6 +857,12 @@ namespace StillsAndReels
         static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
         [DllImport("user32.dll")]
         static extern int GetSystemMetrics(int index);
+        [StructLayout(LayoutKind.Sequential)]
+        struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+        [DllImport("user32.dll")]
+        static extern IntPtr MonitorFromPoint(Point pt, uint flags);
+        [DllImport("user32.dll")]
+        static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr SendMessageTimeout(IntPtr hwnd, int msg, IntPtr wParam, StringBuilder lParam, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll")]
@@ -620,6 +873,42 @@ namespace StillsAndReels
         static extern int AccessibleObjectFromPoint(POINT pt, [MarshalAs(UnmanagedType.Interface)] out IAccessible acc, out object child);
         [DllImport("oleacc.dll")]
         static extern int AccessibleChildren(IAccessible container, int start, int count, [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 2)] object[] children, out int obtained);
+    }
+
+    /// <summary>
+    /// A short local log of what pick-up saw (window types, what was found, why something was skipped), so a pick-up
+    /// that doesn't work can be looked into: Help > Pick-up log. It never holds page text, addresses or key presses,
+    /// only file paths that were picked up. It stays on this PC and is trimmed as it grows.
+    /// </summary>
+    internal static class PickupLog
+    {
+        static readonly object gate = new object();
+
+        public static string FilePath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StillsAndReels", "pickup-log.txt"); }
+        }
+
+        public static void Write(string line)
+        {
+            try
+            {
+                lock (gate)
+                {
+                    string path = FilePath;
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    var fi = new FileInfo(path);
+                    if (fi.Exists && fi.Length > 256 * 1024)
+                    {
+                        string old = path + ".old";
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Move(path, old);
+                    }
+                    File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + line + Environment.NewLine, Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
     }
 
     /// <summary>Tells the main window when the clipboard changes (Copy image in a browser, Ctrl+C on a file).</summary>

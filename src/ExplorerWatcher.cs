@@ -27,6 +27,7 @@ namespace StillsAndReels
         Thread thread;
         string lastCandidate;
         string lastDesktop;
+        bool desktopFailLogged;
         int lastCount = -1;
 
         public bool Paused
@@ -192,7 +193,11 @@ namespace StillsAndReels
             string cls = fg == IntPtr.Zero ? "" : NativeMethods.ClassName(fg);
             if (cls != "Progman" && cls != "WorkerW") return false;
             object view = DesktopView(windowsObj);
-            if (view == null) return true;
+            if (view == null)
+            {
+                if (!desktopFailLogged) { desktopFailLogged = true; PickupLog.Write("desktop: couldn't read the desktop's selection (clicks are still followed)"); }
+                return true;
+            }
             try
             {
                 string path; FileKind kind;
@@ -202,6 +207,7 @@ namespace StillsAndReels
                 if (!string.Equals(key, lastDesktop, StringComparison.OrdinalIgnoreCase))
                 {
                     lastDesktop = key;
+                    PickupLog.Write("desktop: selected " + path);
                     var h = SelectionChanged;
                     if (h != null) h(path, kind);
                 }

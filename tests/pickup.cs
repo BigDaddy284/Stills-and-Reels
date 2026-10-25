@@ -39,6 +39,25 @@ class T {
     long h1=(long)P("Hash",new object[]{bmp}), h2=(long)P("Hash",new object[]{new Bitmap(bmp)});
     long h3=(long)P("Hash",new object[]{new Bitmap(bmp.Width,bmp.Height)});
     Check(h1==h2 && h1!=h3,"same picture same hash, different picture different hash");
+    // pictures found from the screen: a "web page" with text and two photos side by side
+    var page=new Bitmap(900,600); var rnd=new Random(1);
+    using(var g=Graphics.FromImage(page)){ g.Clear(Color.White);
+      for(int i=0;i<12;i++) g.DrawString("Some text on the page that is not a picture at all "+i, new Font(FontFamily.GenericSansSerif,11), Brushes.Black, 20, 20+i*20); }
+    Action<Rectangle> photo = rc => { for(int y=rc.Top;y<rc.Bottom;y++) for(int x=rc.Left;x<rc.Right;x++)
+        page.SetPixel(x,y,Color.FromArgb((x*3+rnd.Next(60))%256,(y*2+rnd.Next(60))%256,(x+y+rnd.Next(80))%256)); };
+    var ph1=new Rectangle(100,300,300,200); var ph2=new Rectangle(404,300,250,200); photo(ph1); photo(ph2);
+    var LooksLikePhoto=pw.GetMethod("LooksLikePhoto",SF); var PictureBlock=pw.GetMethod("PictureBlock",SF);
+    var blk=(Rectangle)PictureBlock.Invoke(null,new object[]{page,new Point(200,400)});
+    Check(blk==ph1,"picture block found exactly: "+blk);
+    Check((bool)LooksLikePhoto.Invoke(null,new object[]{page,blk}),"photo looks like a photo");
+    var blk2=(Rectangle)PictureBlock.Invoke(null,new object[]{page,new Point(500,350)});
+    Check(blk2==ph2,"neighbouring picture separated by its gap: "+blk2);
+    var txt=(Rectangle)PictureBlock.Invoke(null,new object[]{page,new Point(60,30)});
+    Check(txt.IsEmpty || !(bool)LooksLikePhoto.Invoke(null,new object[]{page,txt}),"text is not a picture: "+txt);
+    Check(((Rectangle)PictureBlock.Invoke(null,new object[]{page,new Point(800,100)})).IsEmpty,"plain background gives nothing");
+    Check(!(bool)LooksLikePhoto.Invoke(null,new object[]{page,new Rectangle(0,0,900,280)}),"text area with background is not a photo");
+    var desk=(System.Collections.Generic.List<string>)pw.GetMethod("DesktopFolders",SF).Invoke(null,null);
+    Check(desk!=null,"desktop folders listed: "+desk.Count);
     cache.GetMethod("Shutdown").Invoke(null,null);
     Console.WriteLine(fails==0?"ALL PASSED":fails+" FAILED");
   }

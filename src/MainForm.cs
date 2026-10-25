@@ -297,6 +297,7 @@ namespace StillsAndReels
 
             var help = new ToolStripMenuItem("&Help");
             help.DropDownItems.Add(Item("&Keyboard shortcuts", Keys.None, (s, e) => ShowShortcuts()));
+            help.DropDownItems.Add(Item("&Pick-up log", Keys.None, (s, e) => OpenPickupLog()));
             help.DropDownItems.Add(Item("&About " + AppName.Replace("&", "&&"), Keys.None, (s, e) => ShowAbout()));
 
             menu.Items.AddRange(new ToolStripItem[] { file, editMenu, view, help });
@@ -927,9 +928,9 @@ namespace StillsAndReels
         // ==================================================================== picking up from other apps
 
         /// <summary>
-        /// What the click pick-up looks for right now. Pictures on web pages and in other apps are only taken in
-        /// Pictures mode (never while editing, where clicking around must not replace the picture), and nothing is
-        /// picked up while a screen recording window is open.
+        /// What the click pick-up looks for right now. Pictures on web pages and in other apps are taken in Pictures
+        /// and Edit picture (but, like File Explorer clicks, never over unsaved edits), and nothing is picked up while
+        /// a screen recording window is open.
         /// </summary>
         void UpdatePickup()
         {
@@ -937,12 +938,19 @@ namespace StillsAndReels
             watcher.FollowDesktop = pickFiles;
             pickup.WantVideos = mode == AppMode.Videos || mode == AppMode.VideoEdit;
             pickup.WantFiles = follow && pickFiles && !recording;
-            pickup.WantPictures = follow && pickClicks && !recording && mode == AppMode.Pictures;
+            pickup.WantPictures = follow && pickClicks && !recording && (mode == AppMode.Pictures || mode == AppMode.PictureEdit);
         }
 
         void OnPictureClicked(Bitmap bmp, string name)
         {
-            if (!follow || !pickClicks || mode != AppMode.Pictures) { bmp.Dispose(); return; }
+            if (!follow || !pickClicks || (mode != AppMode.Pictures && mode != AppMode.PictureEdit)) { bmp.Dispose(); return; }
+            if (edit != null && edit.IsDirty)
+            {
+                // like File Explorer clicks: never throw away unsaved edits
+                PickupLog.Write("picture: not shown, the picture being edited has unsaved edits");
+                bmp.Dispose();
+                return;
+            }
             ShowPickedPicture(bmp, name);
         }
 
@@ -953,6 +961,15 @@ namespace StillsAndReels
             catch { }
             finally { bmp.Dispose(); }
             if (path != null) OpenPath(path, FileKind.Image);
+        }
+
+        /// <summary>Opens the pick-up log in Notepad, to see why a click wasn't picked up.</summary>
+        void OpenPickupLog()
+        {
+            string path = PickupLog.FilePath;
+            if (!File.Exists(path)) PickupLog.Write("log opened (nothing picked up or skipped yet)");
+            try { Process.Start("notepad.exe", "\"" + path + "\""); }
+            catch { MessageBox.Show(this, "The pick-up log is at:\n" + path, AppName); }
         }
 
         void OnClipboardChanged()

@@ -29,7 +29,10 @@
 
 - Pictures mode also picks up a picture you click on a web page or in another app. It is copied from the screen exactly as shown there, because the app never downloads anything. For the full-size original, copy the image: copied pictures are picked up at full quality.
 - Files you click on the desktop or in an Open/Save dialog of any app are followed like File Explorer clicks, and so are files you copy (Ctrl+C).
-- Turn each of these on or off in Settings > Following. Nothing is picked up while you are in Edit picture (web and copied pictures) or while the video Snip window is open. Clicks are only watched, never blocked or changed, and the app doesn't record which keys you press or which pages you visit.
+- Pictures on web pages are found even when the page hides them from accessibility tools (photo sites, OneDrive), and browsers get a moment to build their accessibility tree. Web pictures are also picked up in Edit picture when there are no unsaved edits.
+- Desktop icons are followed even when the Desktop is backed up to OneDrive.
+- **Help > Pick-up log** shows what the app saw when a click wasn't picked up. It stays on your PC.
+- Turn each of these on or off in Settings > Following. Copied pictures are not picked up while you are in Edit picture, and nothing is picked up while the video Snip window is open. Clicks are only watched, never blocked or changed, and the app doesn't record which keys you press or which pages you visit.
 
 ## 2.1
 
