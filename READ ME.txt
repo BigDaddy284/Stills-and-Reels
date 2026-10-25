@@ -8,17 +8,21 @@ Stills & Reels 2.2
    (This appears because the app isn't code-signed.)
 
 Following clicks anywhere (new)
-- Pictures mode now also picks up a picture you click on a web page or in another app.
-  It is copied from the screen exactly as shown there (same size as on screen), because
-  the app never downloads anything. For the full-size original, right-click the picture
+- Pictures mode (and Edit picture, when there are no unsaved edits) also picks up a picture
+  you click on a web page or in another app, including photo sites and the OneDrive website
+  or app that hide their pictures from accessibility tools. It is copied from the screen
+  exactly as shown there (same size as on screen), because the app never downloads anything. For the full-size original, right-click the picture
   in your browser and choose "Copy image": copied pictures are picked up at full quality.
 - Files you click on the desktop or in an Open/Save dialog of any app are followed like
   File Explorer clicks: pictures in Pictures mode, videos in Videos mode and the video editor.
 - Files you copy anywhere (Ctrl+C) are followed too.
 - Turn each of these on or off in Settings > Following. "Follow clicks and File Explorer
   selection" in the View menu still switches all following off and on.
-- Pictures from web pages and copied pictures are never taken while you are in Edit picture,
+- Copied pictures are never taken while you are in Edit picture (a copy there is for pasting),
   and nothing is picked up while the video Snip window is open.
+- Desktop icons are followed even when your Desktop is backed up to OneDrive.
+- If a click isn't picked up, Help > Pick-up log shows what the app saw (the kind of window,
+  what it found and why it skipped it). The log stays on your PC.
 - Clicks are only watched, never blocked or changed. The app doesn't record which
   keys you press or anything about the pages you visit.
 
