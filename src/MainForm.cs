@@ -15,6 +15,10 @@ namespace StillsAndReels
 
         readonly Settings settings = new Settings();
         readonly ExplorerWatcher watcher = new ExplorerWatcher();
+        readonly PickupWatcher pickup = new PickupWatcher();
+        ClipboardWatcher clipWatch;
+        bool pickClicks = true, pickFiles = true, pickCopied = true;
+        readonly System.Windows.Forms.Timer clipTimer = new System.Windows.Forms.Timer { Interval = 150 };
         readonly ImageCanvas canvas = new ImageCanvas();
         readonly VideoView videoView = new VideoView();
         readonly ThemedPanel content = new ThemedPanel { Surface = Surface.Canvas, Dock = DockStyle.Fill };
@@ -140,6 +144,13 @@ namespace StillsAndReels
 
             watcher.SelectionChanged += (path, kind) => Post(() => OnExplorerSelection(path, kind));
             watcher.WindowCountChanged += n => Post(() => { explorerCount = n; UpdateStatus(); });
+            pickup.FileClicked += (path, kind) => Post(() => OnExplorerSelection(path, kind));
+            pickup.PictureClicked += (bmp, name) =>
+            {
+                if (IsDisposed || !IsHandleCreated) { bmp.Dispose(); return; }
+                try { BeginInvoke((Action)(() => OnPictureClicked(bmp, name))); } catch { bmp.Dispose(); }
+            };
+            clipTimer.Tick += (s, e) => { clipTimer.Stop(); ReadCopied(); };
         }
 
         void Post(Action a)
@@ -159,6 +170,14 @@ namespace StillsAndReels
             base.OnShown(e);
             watcher.Paused = !follow;
             watcher.Start();
+            UpdatePickup();
+            pickup.Start();
+            try
+            {
+                clipWatch = new ClipboardWatcher();
+                clipWatch.Changed += (s, e2) => OnClipboardChanged();
+            }
+            catch { clipWatch = null; }
             if (!string.IsNullOrEmpty(startupFile) && File.Exists(startupFile)) OpenAny(startupFile);
             UpdateUi();
         }
@@ -261,7 +280,7 @@ namespace StillsAndReels
             }
             miPlayback.DropDownItems.AddRange(new ToolStripItem[] { miPlay, miBack, miForward, miMute, miSpeed, new ToolStripSeparator(), miFullscreen });
 
-            miFollow = Item("Follow File &Explorer selection", Keys.None, (s, e) => SetFollow(!follow));
+            miFollow = Item("&Follow clicks and File Explorer selection", Keys.None, (s, e) => SetFollow(!follow));
             miTopMost = Item("Always on &top", Keys.None, (s, e) => { TopMost = !TopMost; UpdateUi(); });
             miStatusBar = Item("&Status bar", Keys.None, (s, e) => { statusBar.Visible = !statusBar.Visible; UpdateUi(); });
             var themeMenu = new ToolStripMenuItem("T&heme");
@@ -347,7 +366,7 @@ namespace StillsAndReels
             m.Items.Add(new ToolStripMenuItem("Dark mode", null, (s, e) => SetDark(true)) { Checked = Theme.Current.Dark });
             m.Items.Add(new ToolStripMenuItem("Light mode", null, (s, e) => SetDark(false)) { Checked = !Theme.Current.Dark });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(new ToolStripMenuItem("Follow File Explorer selection", null, (s, e) => SetFollow(!follow)) { Checked = follow });
+            m.Items.Add(new ToolStripMenuItem("Follow clicks and File Explorer selection", null, (s, e) => SetFollow(!follow)) { Checked = follow });
             m.Items.Add(new ToolStripMenuItem("Always on top", null, (s, e) => { TopMost = !TopMost; UpdateUi(); }) { Checked = TopMost });
             m.Items.Add(new ToolStripMenuItem("Status bar", null, (s, e) => { statusBar.Visible = !statusBar.Visible; UpdateUi(); }) { Checked = statusBar.Visible });
             m.Items.Add(new ToolStripSeparator());
@@ -376,6 +395,9 @@ namespace StillsAndReels
 
             TopMost = settings.GetBool("AlwaysOnTop", false);
             follow = settings.GetBool("FollowExplorer", true);
+            pickClicks = settings.GetBool("PickUpClicks", true);
+            pickFiles = settings.GetBool("PickUpFiles", true);
+            pickCopied = settings.GetBool("PickUpCopied", true);
             statusBar.Visible = settings.GetBool("StatusBar", true);
             canvas.ShowPixelGrid = settings.GetBool("PixelGrid", false);
             autoplay = settings.GetBool("AutoplayVideos", false);
@@ -400,6 +422,9 @@ namespace StillsAndReels
             settings.Set("Maximized", fullscreen ? prevState == FormWindowState.Maximized : WindowState == FormWindowState.Maximized);
             settings.Set("AlwaysOnTop", TopMost);
             settings.Set("FollowExplorer", follow);
+            settings.Set("PickUpClicks", pickClicks);
+            settings.Set("PickUpFiles", pickFiles);
+            settings.Set("PickUpCopied", pickCopied);
             settings.Set("StatusBar", fullscreen ? prevStatusVisible : statusBar.Visible);
             settings.Set("Theme", Theme.Current.Dark ? "Dark" : "Light");
             settings.Set("PixelGrid", canvas.ShowPixelGrid);
@@ -422,7 +447,8 @@ namespace StillsAndReels
             var o = new SettingsForm.Options
             {
                 Dark = Theme.Current.Dark, Follow = follow, TopMost = TopMost, StatusBar = statusBar.Visible,
-                PixelGrid = canvas.ShowPixelGrid, Autoplay = autoplay, KeepViewed = keepViewedVideos
+                PixelGrid = canvas.ShowPixelGrid, Autoplay = autoplay, KeepViewed = keepViewedVideos,
+                PickClicks = pickClicks, PickFiles = pickFiles, PickCopied = pickCopied
             };
             using (var f = new SettingsForm(o, ApplyOptions)) f.ShowDialog(this);
         }
@@ -436,6 +462,9 @@ namespace StillsAndReels
             canvas.ShowPixelGrid = o.PixelGrid;
             autoplay = o.Autoplay;
             keepViewedVideos = o.KeepViewed;
+            pickClicks = o.PickClicks;
+            pickFiles = o.PickFiles;
+            pickCopied = o.PickCopied;
             UpdateUi();
         }
 
@@ -484,6 +513,8 @@ namespace StillsAndReels
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             watcher.Dispose();
+            pickup.Dispose();
+            if (clipWatch != null) clipWatch.Dispose();
             videoView.Player.Dispose();
             editor.Dispose();
             ReleaseCurrent();
@@ -515,8 +546,8 @@ namespace StillsAndReels
             {
                 if (!CloseEditSession(true)) return false;
                 sidebar.Visible = false;
-                canvas.SetEmptyState(Ico.Picture, "Click an image in File Explorer",
-                    "Select a picture in any File Explorer window and it will appear here.\nArrow keys work too. Use File > Open to pick one directly.");
+                canvas.SetEmptyState(Ico.Picture, "Click a picture anywhere",
+                    "Click a picture in File Explorer, on the desktop, on a web page or in another app, or copy one,\nand it appears here. Arrow keys work in File Explorer. Use File > Open to pick one directly.");
             }
             if (mode == AppMode.Videos)
             {
@@ -557,7 +588,7 @@ namespace StillsAndReels
                 sidebar.Visible = true;
                 topBar.Modes.Mode = mode;
                 canvas.SetEmptyState(Ico.Pencil, "Pick a picture to edit",
-                    "Click a picture in File Explorer, or use File > Open.\nIt opens here, ready to draw on, crop, rotate or flip.");
+                    "Click a picture in File Explorer, open one with File > Open, or paste one.\nIt opens here, ready to draw on, crop, rotate or flip.");
             }
             if (edit == null && current != null && current.Image != null) StartEditSession();
             if (edit != null)
@@ -591,8 +622,8 @@ namespace StillsAndReels
             {
                 if (!CloseEditSession(true)) return;
                 sidebar.Visible = false;
-                canvas.SetEmptyState(Ico.Picture, "Click an image in File Explorer",
-                    "Select a picture in any File Explorer window and it will appear here.\nArrow keys work too. Use File > Open to pick one directly.");
+                canvas.SetEmptyState(Ico.Picture, "Click a picture anywhere",
+                    "Click a picture in File Explorer, on the desktop, on a web page or in another app, or copy one,\nand it appears here. Arrow keys work in File Explorer. Use File > Open to pick one directly.");
             }
             bool fromViewer = mode == AppMode.Videos;
             if (mode == AppMode.Videos)
@@ -619,7 +650,7 @@ namespace StillsAndReels
             if (mode != AppMode.VideoEdit) EnterVideoEdit();
             if (videoSnip == null || videoSnip.IsDisposed)
             {
-                videoSnip = new VideoSnipForm(this, (path, temporary) =>
+                videoSnip = new VideoSnipForm(this, settings, (path, temporary) =>
                 {
                     if (mode != AppMode.VideoEdit) EnterVideoEdit();
                     var m = editor.Library.Add(path, 0, temporary);
@@ -891,6 +922,76 @@ namespace StillsAndReels
             var files = e.Data.GetData(DataFormats.FileDrop) as string[];
             if (mode == AppMode.VideoEdit && files != null) { editor.ImportFiles(files, false); return; }
             if (files != null && files.Length > 0 && File.Exists(files[0])) OpenAny(files[0]);
+        }
+
+        // ==================================================================== picking up from other apps
+
+        /// <summary>
+        /// What the click pick-up looks for right now. Pictures on web pages and in other apps are only taken in
+        /// Pictures mode (never while editing, where clicking around must not replace the picture), and nothing is
+        /// picked up while a screen recording window is open.
+        /// </summary>
+        void UpdatePickup()
+        {
+            bool recording = videoSnip != null && !videoSnip.IsDisposed;
+            watcher.FollowDesktop = pickFiles;
+            pickup.WantVideos = mode == AppMode.Videos || mode == AppMode.VideoEdit;
+            pickup.WantFiles = follow && pickFiles && !recording;
+            pickup.WantPictures = follow && pickClicks && !recording && mode == AppMode.Pictures;
+        }
+
+        void OnPictureClicked(Bitmap bmp, string name)
+        {
+            if (!follow || !pickClicks || mode != AppMode.Pictures) { bmp.Dispose(); return; }
+            ShowPickedPicture(bmp, name);
+        }
+
+        void ShowPickedPicture(Bitmap bmp, string name)
+        {
+            string path = null;
+            try { path = ImageCache.SavePicked(bmp, name); }
+            catch { }
+            finally { bmp.Dispose(); }
+            if (path != null) OpenPath(path, FileKind.Image);
+        }
+
+        void OnClipboardChanged()
+        {
+            if (!follow || !pickCopied || mode == AppMode.PictureEdit) return;   // in Edit, a copy is for pasting
+            if (ClipboardWatcher.FromThisApp()) return;
+            clipTimer.Stop();
+            clipTimer.Start();   // give the copying app a moment to put all its formats on the clipboard
+        }
+
+        /// <summary>A file copied anywhere (Ctrl+C) is followed like a click; a copied picture ("Copy image") is shown at full quality in Pictures mode.</summary>
+        void ReadCopied()
+        {
+            if (!follow || !pickCopied || mode == AppMode.PictureEdit || IsDisposed) return;
+            try
+            {
+                if (ClipboardWatcher.FromThisApp()) return;
+                var data = Clipboard.GetDataObject();
+                if (data == null) return;
+                bool videos = mode == AppMode.Videos || mode == AppMode.VideoEdit;
+                if (data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    var files = data.GetData(DataFormats.FileDrop) as string[];
+                    if (files == null) return;
+                    for (int i = 0; i < files.Length && i < 100; i++)
+                    {
+                        var k = FileTypes.Classify(files[i]);
+                        bool wanted = videos ? k == FileKind.Video : k == FileKind.Image || k == FileKind.Incompatible;
+                        if (wanted && File.Exists(files[i])) { OnExplorerSelection(files[i], k); return; }
+                    }
+                    return;
+                }
+                if (mode != AppMode.Pictures) return;
+                // Office copies cells and text as pictures too; those aren't pictures the user meant to look at.
+                if (data.GetDataPresent(DataFormats.Rtf) || data.GetDataPresent(DataFormats.CommaSeparatedValue) || data.GetDataPresent("Object Descriptor")) return;
+                var bmp = ClipboardPicture();
+                if (bmp != null) ShowPickedPicture(bmp, "Copied picture");
+            }
+            catch { }
         }
 
         void SetFollow(bool on)
@@ -1276,6 +1377,12 @@ namespace StillsAndReels
                 dlg.AddExtension = true;
                 dlg.OverwritePrompt = true;
                 string dir = Path.GetDirectoryName(source);
+                if (ImageCache.IsPicked(source))
+                {
+                    // picked up from a web page or another app: it only lives in the temporary folder
+                    string pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+                    dir = string.IsNullOrEmpty(pics) ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : pics;
+                }
                 string name = Path.GetFileNameWithoutExtension(source);
                 string ext = (Path.GetExtension(source) ?? "").ToLowerInvariant();
                 int filter;
@@ -1362,7 +1469,9 @@ namespace StillsAndReels
         {
             MessageBox.Show(this,
                 AppName + " 2.2\n\n" +
-                "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here.\n\n" +
+                "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
+                "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
+                "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +
                 "Pictures are read from a temporary copy that is deleted as soon as you move to another picture. " +
                 "Videos you view are played in place and (if you allow it in Settings) copied into the video editor's Media, " +
                 "where they stay until you remove them or close the app. Edits are only ever saved as new files – your originals are never changed.\n\n" +
@@ -1571,6 +1680,7 @@ namespace StillsAndReels
             statusBar.ZoomIn.Enabled = statusBar.ZoomOut.Enabled = (canvas.HasContent && pictures) || vedit;
             statusBar.Grid.Enabled = pictures;
             statusBar.Grid.Checked = canvas.ShowPixelGrid && pictures;
+            UpdatePickup();
             UpdateMenus();
             UpdateStatus();
         }
@@ -1614,12 +1724,15 @@ namespace StillsAndReels
             statusBar.Busy = transientStatus != null && loading;
 
             string right;
-            if (mode == AppMode.PictureEdit && edit != null && edit.IsDirty) right = "Unsaved edits – File Explorer selection paused";
-            else if (!follow) right = "Not following File Explorer";
+            bool anywhere = pickFiles || pickCopied || (pickClicks && mode == AppMode.Pictures);
+            string windows = explorerCount + " File Explorer window" + (explorerCount == 1 ? "" : "s");
+            if (mode == AppMode.PictureEdit && edit != null && edit.IsDirty) right = "Unsaved edits – following paused";
+            else if (!follow) right = "Not following clicks or File Explorer";
             else if (explorerCount < 0) right = "Looking for File Explorer windows…";
+            else if (mode == AppMode.VideoEdit) right = anywhere ? "Videos you click go to Media" : "Videos you click in File Explorer go to Media";
+            else if (anywhere) right = (mode == AppMode.Videos ? "Following videos you click" : "Following pictures you click") + " · " + windows;
             else if (explorerCount == 0) right = "No File Explorer windows open";
-            else if (mode == AppMode.VideoEdit) right = "Videos you click in File Explorer go to Media";
-            else right = "Watching " + explorerCount + " File Explorer window" + (explorerCount == 1 ? "" : "s") + (mode == AppMode.Videos ? " for videos" : "");
+            else right = "Watching " + windows + (mode == AppMode.Videos ? " for videos" : "");
             statusBar.RightText = right;
         }
 

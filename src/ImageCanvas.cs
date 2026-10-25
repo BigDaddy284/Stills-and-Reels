@@ -147,8 +147,8 @@ namespace StillsAndReels
 
         // Empty-state text shown when there is nothing to display (and no message).
         public Ico EmptyIcon = Ico.Picture;
-        public string EmptyTitle = "Click an image in File Explorer";
-        public string EmptyDetail = "Select a picture in any File Explorer window and it will appear here.\nArrow keys work too. Use File > Open to pick one directly.";
+        public string EmptyTitle = "Click a picture anywhere";
+        public string EmptyDetail = "Click a picture in File Explorer, on the desktop, on a web page or in another app, or copy one,\nand it appears here. Arrow keys work in File Explorer. Use File > Open to pick one directly.";
 
         bool pixelGrid;
         public bool ShowPixelGrid { get { return pixelGrid; } set { pixelGrid = value; Invalidate(); } }

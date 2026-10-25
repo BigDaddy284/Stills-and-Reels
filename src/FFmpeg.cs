@@ -19,6 +19,7 @@ namespace StillsAndReels
         public int Width, Height;          // display size (after rotation and aspect ratio)
         public double Fps;
         public string VideoCodec, AudioCodec;
+        public bool ColourTagged;          // the video says which colour standard it uses (e.g. bt709)
         public long FileSize;
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -49,6 +50,7 @@ namespace StillsAndReels
                     info.HasVideo = true;
                     var cm = Regex.Match(line, @"Video:\s*([A-Za-z0-9_]+)");
                     if (cm.Success) info.VideoCodec = cm.Groups[1].Value;
+                    info.ColourTagged = Regex.IsMatch(line, @"\b(bt709|bt470bg|smpte170m|smpte240m|bt2020nc|bt2020c|fcc|ycgco)\b");
                     var sm = Regex.Match(line, @"[ ,](\d{2,5})x(\d{2,5})[ ,\]]");
                     if (sm.Success)
                     {

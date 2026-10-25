@@ -70,6 +70,36 @@ namespace StillsAndReels
             return target;
         }
 
+        /// <summary>
+        /// Saves a picture picked up from the screen or the clipboard as a PNG in the cache, so it is shown
+        /// (and copied again) like any other file. Only the latest few are kept; all go when the app closes.
+        /// </summary>
+        public static string SavePicked(Bitmap bmp, string name)
+        {
+            string folder = Path.Combine(dir, "Picked");
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var old = new DirectoryInfo(folder).GetFiles();
+                Array.Sort(old, (a, b) => b.CreationTimeUtc.CompareTo(a.CreationTimeUtc));
+                for (int i = 4; i < old.Length; i++) Delete(old[i].FullName);
+            }
+            catch { }
+            string baseName = string.IsNullOrWhiteSpace(name) ? "Picture" : name.Trim();
+            string path = Path.Combine(folder, baseName + ".png");
+            for (int i = 2; File.Exists(path) && i < 10000; i++) path = Path.Combine(folder, baseName + " (" + i + ").png");
+            bmp.Save(path, ImageFormat.Png);
+            try { File.SetAttributes(path, FileAttributes.Normal | FileAttributes.Temporary); } catch { }
+            return path;
+        }
+
+        /// <summary>True for pictures picked up from the screen or clipboard (they live in the cache, not in a real folder).</summary>
+        public static bool IsPicked(string path)
+        {
+            if (string.IsNullOrEmpty(path) || dir == null) return false;
+            return path.StartsWith(Path.Combine(dir, "Picked") + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
         public static void Delete(string cachePath)
         {
             if (string.IsNullOrEmpty(cachePath)) return;

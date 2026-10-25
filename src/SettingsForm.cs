@@ -9,7 +9,7 @@ namespace StillsAndReels
     {
         public sealed class Options
         {
-            public bool Dark, Follow, TopMost, StatusBar, PixelGrid, Autoplay, KeepViewed;
+            public bool Dark, Follow, TopMost, StatusBar, PixelGrid, Autoplay, KeepViewed, PickClicks, PickFiles, PickCopied;
         }
 
         readonly Options o;
@@ -47,8 +47,11 @@ namespace StillsAndReels
             body.Controls.Add(light);
             y += Theme.S(56);
 
-            y = AddSection("File Explorer", y, pad, w);
+            y = AddSection("Following", y, pad, w);
             y = AddToggle("Follow the selection in File Explorer", o.Follow, v => o.Follow = v, y, pad, w);
+            y = AddToggle("Also files clicked on the desktop and in Open/Save dialogs", o.PickFiles, v => o.PickFiles = v, y, pad, w);
+            y = AddToggle("Pick up pictures I click on web pages and in other apps", o.PickClicks, v => o.PickClicks = v, y, pad, w);
+            y = AddToggle("Pick up pictures and files I copy (full quality)", o.PickCopied, v => o.PickCopied = v, y, pad, w);
 
             y = AddSection("Pictures", y, pad, w);
             y = AddToggle("Show pixel grid when zoomed in (600%+)", o.PixelGrid, v => o.PixelGrid = v, y, pad, w);

@@ -26,6 +26,7 @@ namespace StillsAndReels
         volatile bool wantVideos;
         Thread thread;
         string lastCandidate;
+        string lastDesktop;
         int lastCount = -1;
 
         public bool Paused
@@ -40,6 +41,9 @@ namespace StillsAndReels
             get { return wantVideos; }
             set { if (wantVideos != value) { wantVideos = value; resetRequested = true; } }
         }
+
+        /// <summary>Also follow the selection on the desktop while the desktop is the active window.</summary>
+        public volatile bool FollowDesktop = true;
 
         public void Start()
         {
@@ -129,8 +133,10 @@ namespace StillsAndReels
                     if (h != null) h(lastCount);
                 }
 
-                if (resetRequested) { resetRequested = false; lastCandidate = null; }
-                if (paused || entries.Count == 0) return;
+                if (resetRequested) { resetRequested = false; lastCandidate = null; lastDesktop = null; }
+                if (paused) return;
+                if (FollowDesktop && TickDesktop(windowsObj)) return;
+                if (entries.Count == 0) return;
 
                 IntPtr target = TopMostOf(tops);
                 if (target == IntPtr.Zero) return;
@@ -175,6 +181,63 @@ namespace StillsAndReels
             }
         }
 
+        /// <summary>
+        /// The desktop is a shell view too, but it isn't in the Explorer window list. While it is the active
+        /// window its selection is followed; it has its own "last" so going back to an Explorer window whose
+        /// selection hasn't changed doesn't replace what was picked on the desktop.
+        /// </summary>
+        bool TickDesktop(object windowsObj)
+        {
+            IntPtr fg = NativeMethods.GetAncestor(NativeMethods.GetForegroundWindow(), NativeMethods.GA_ROOT);
+            string cls = fg == IntPtr.Zero ? "" : NativeMethods.ClassName(fg);
+            if (cls != "Progman" && cls != "WorkerW") return false;
+            object view = DesktopView(windowsObj);
+            if (view == null) return true;
+            try
+            {
+                string path; FileKind kind;
+                ReadViewSelection(view, wantVideos, out path, out kind);
+                if (path == null) { lastDesktop = null; return true; }
+                string key = kind + "|" + path;
+                if (!string.Equals(key, lastDesktop, StringComparison.OrdinalIgnoreCase))
+                {
+                    lastDesktop = key;
+                    var h = SelectionChanged;
+                    if (h != null) h(path, kind);
+                }
+            }
+            finally { Release(view); }
+            return true;
+        }
+
+        /// <summary>The desktop's folder view (IShellFolderViewDual), as Raymond Chen's "desktop selection" sample gets it.</summary>
+        static object DesktopView(object windowsObj)
+        {
+            object disp = null, browser = null, viewObj = null;
+            try
+            {
+                var sw = windowsObj as IShellWindows;
+                if (sw == null) return null;
+                object loc = 0 /* CSIDL_DESKTOP */, root = null;
+                int hwnd;
+                disp = sw.FindWindowSW(ref loc, ref root, 8 /* SWC_DESKTOP */, out hwnd, 1 /* SWFO_NEEDDISPATCH */);
+                var sp = disp as IComServiceProvider;
+                if (sp == null) return null;
+                Guid sid = SID_STopLevelBrowser, iid = IID_IShellBrowser;
+                if (sp.QueryService(ref sid, ref iid, out browser) != 0) return null;
+                var sb = browser as IShellBrowser;
+                IShellView view;
+                if (sb == null || sb.QueryActiveShellView(out view) != 0 || view == null) return null;
+                viewObj = view;
+                Guid idisp = new Guid("00020400-0000-0000-C000-000000000046");
+                object folderView;
+                if (view.GetItemObject(0 /* SVGIO_BACKGROUND */, ref idisp, out folderView) != 0) return null;
+                return folderView;
+            }
+            catch { return null; }
+            finally { Release(viewObj); Release(browser); Release(disp); }
+        }
+
         static IntPtr TopMostOf(HashSet<IntPtr> candidates)
         {
             if (candidates.Count == 0) return IntPtr.Zero;
@@ -214,12 +277,24 @@ namespace StillsAndReels
         static void ReadSelection(object window, bool videos, out string path, out FileKind kind)
         {
             path = null; kind = FileKind.Other;
-            object doc = null, items = null;
-            string firstIncompatible = null;
+            object doc = null;
             try
             {
                 doc = ((dynamic)window).Document;
-                if (doc == null) return;
+                if (doc != null) ReadViewSelection(doc, videos, out path, out kind);
+            }
+            catch { path = null; kind = FileKind.Other; }
+            finally { Release(doc); }
+        }
+
+        /// <summary>Reads the selection of a shell folder view (an Explorer tab's Document, or the desktop).</summary>
+        static void ReadViewSelection(object doc, bool videos, out string path, out FileKind kind)
+        {
+            path = null; kind = FileKind.Other;
+            object items = null;
+            string firstIncompatible = null;
+            try
+            {
                 items = ((dynamic)doc).SelectedItems();
                 if (items == null) return;
                 dynamic sel = items;
@@ -267,7 +342,6 @@ namespace StillsAndReels
             finally
             {
                 Release(items);
-                Release(doc);
             }
         }
 

@@ -16,7 +16,8 @@ namespace StillsAndReels
 {
     /// <summary>
     /// Records part of the screen with FFmpeg (gdigrab), optionally with a microphone (dshow).
-    /// Pausing closes the current segment; stopping joins the segments into one MP4 in the cache.
+    /// Segments are captured losslessly (exact screen pixels); pausing closes the current segment, and stopping
+    /// encodes all segments once into a high-quality MP4 in the cache.
     /// </summary>
     internal sealed class ScreenRecorder : IDisposable
     {
@@ -24,10 +25,14 @@ namespace StillsAndReels
         public int Fps = 30;
         public bool ShowCursor = true;
         public string Microphone;     // dshow device name, or null
+        public bool PcSound;          // also record what the PC plays (WASAPI loopback, see PcSoundCapture)
+        PcSoundCapture pc;
 
         readonly List<string> segments = new List<string>();
         readonly StringBuilder log = new StringBuilder();
         Process proc;
+        Process finishProc;           // the final encode, so Discard can stop it
+        volatile bool discarded;
         readonly Stopwatch segClock = new Stopwatch();
         double before;
         public event Action<string> Failed; // any thread
@@ -63,25 +68,47 @@ namespace StillsAndReels
             int w = Math.Max(16, Region.Width) & ~1, h = Math.Max(16, Region.Height) & ~1;
             string seg = Path.Combine(MediaLibrary.Folder, "rec-" + Guid.NewGuid().ToString("N") + ".mkv");
             var inv = CultureInfo.InvariantCulture;
-            var sb = new StringBuilder("-hide_banner -loglevel error ");
-            sb.AppendFormat(inv, "-thread_queue_size 1024 -f gdigrab -framerate {0} -draw_mouse {1} -offset_x {2} -offset_y {3} -video_size {4}x{5} -i desktop ",
+            string video = DesktopDuplicationInput(Region, w, h, Fps, ShowCursor) ?? string.Format(inv,
+                "-f gdigrab -framerate {0} -draw_mouse {1} -offset_x {2} -offset_y {3} -video_size {4}x{5} -i desktop ",
                 Fps, ShowCursor ? 1 : 0, Region.X, Region.Y, w, h);
-            if (!string.IsNullOrEmpty(Microphone))
-                sb.Append("-thread_queue_size 1024 -f dshow -i audio=\"").Append(Microphone.Replace("\"", "")).Append("\" ");
-            sb.AppendFormat(inv, "-map 0:v ");
-            if (!string.IsNullOrEmpty(Microphone)) sb.Append("-map 1:a -c:a aac -b:a 160k ");
-            sb.AppendFormat(inv, "-c:v libx264 -preset ultrafast -crf 21 -pix_fmt yuv420p -g {0} -y ", Fps * 2);
-            sb.Append(FFmpeg.Quote(seg));
+            string micInput = string.IsNullOrEmpty(Microphone) ? null : "-f dshow -i audio=\"" + Microphone.Replace("\"", "") + "\" ";
+            string pcInput = null;
+            if (PcSound)
+            {
+                pc = new PcSoundCapture();
+                pc.Open();
+                pcInput = pc.InputFormatArgs + "-i " + FFmpeg.Quote(pc.PipePath) + " ";
+            }
+            var sb = new StringBuilder(BuildArgs(video, micInput, pcInput, Fps, seg));
             var psi = new ProcessStartInfo(FFmpeg.Locate(), sb.ToString())
             {
                 UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             };
-            var p = Process.Start(psi);
+            Process p;
+            try { p = Process.Start(psi); }
+            catch { StopPc(); throw; }
             FFmpeg.AddToJob(p);
-            p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (log) { if (log.Length < 6000) log.AppendLine(e.Data); } };
+            var pcNow = pc;
+            var diag = new StringBuilder();
+            var wall = Stopwatch.StartNew();
+            diag.AppendFormat(inv, "args: {0}\n", sb);
+            p.ErrorDataReceived += (s, e) =>
+            {
+                if (e.Data == null) return;
+                if (pcNow != null) pcNow.OnFfmpegLine(e.Data);
+                lock (diag)
+                {
+                    if (diag.Length < 200000) diag.AppendFormat(inv, "{0,8:0.000} {1}\n", wall.Elapsed.TotalSeconds, e.Data);
+                    // progress lines aren't errors; keep them out of the message shown when a recording fails
+                    if (!e.Data.StartsWith("frame=", StringComparison.Ordinal) && !e.Data.StartsWith("size=", StringComparison.Ordinal))
+                        lock (log) { if (log.Length < 6000) log.AppendLine(e.Data); }
+                }
+            };
             p.BeginErrorReadLine();
             p.OutputDataReceived += (s, e) => { };
+            diagLogs[seg] = diag;
+            diagPc[seg] = pcNow;
             p.BeginOutputReadLine();
             p.EnableRaisingEvents = true;
             p.Exited += (s, e) =>
@@ -97,6 +124,87 @@ namespace StillsAndReels
             segClock.Restart();
         }
 
+        static readonly Dictionary<int, bool> ddaWorks = new Dictionary<int, bool>();
+
+        /// <summary>
+        /// Screen input through Desktop Duplication (FFmpeg's ddagrab): whole frames straight from the GPU, so
+        /// no tearing and far less CPU than gdigrab, which copies the screen line by line while it is being drawn.
+        /// Returns null (use gdigrab) when the area spans two screens or Desktop Duplication isn't available
+        /// (remote desktop, some older drivers); that is checked once per screen with a short trial run.
+        /// </summary>
+        static string DesktopDuplicationInput(Rectangle region, int w, int h, int fps, bool cursor)
+        {
+            if (!FFmpeg.IsWindows) return null;
+            var all = Screen.AllScreens;
+            int idx = -1;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var b = all[i].Bounds;
+                if (region.X >= b.Left && region.Y >= b.Top && region.X + w <= b.Right && region.Y + h <= b.Bottom) { idx = i; break; }
+            }
+            if (idx < 0) return null;
+            var inv = CultureInfo.InvariantCulture;
+            bool ok;
+            lock (ddaWorks)
+            {
+                if (!ddaWorks.TryGetValue(idx, out ok))
+                {
+                    ok = false;
+                    try
+                    {
+                        string trial = string.Format(inv, "-hide_banner -loglevel error -nostdin -f lavfi -i \"ddagrab=output_idx={0}:video_size=64x64:framerate=10,hwdownload,format=bgra\" -frames:v 2 -f null -", idx);
+                        using (var t = FFmpeg.Start(trial))
+                        {
+                            t.BeginErrorReadLine();
+                            t.StandardOutput.ReadToEnd();
+                            if (t.WaitForExit(5000)) ok = t.ExitCode == 0; else FFmpeg.KillQuietly(t);
+                        }
+                    }
+                    catch { ok = false; }
+                    ddaWorks[idx] = ok;
+                }
+            }
+            if (!ok) return null;
+            var sb = all[idx].Bounds;
+            return string.Format(inv, "-f lavfi -i \"ddagrab=output_idx={0}:offset_x={1}:offset_y={2}:video_size={3}x{4}:framerate={5}:draw_mouse={6},hwdownload,format=bgra\" ",
+                idx, region.X - sb.Left, region.Y - sb.Top, w, h, fps, cursor ? 1 : 0);
+        }
+
+        /// <summary>
+        /// FFmpeg arguments for one recording segment. videoInput/micInput/pcInput are the input options
+        /// ending in "-i ..." (mic and PC sound may be null). Kept separate so tests can swap in other inputs.
+        /// </summary>
+        internal static string BuildArgs(string videoInput, string micInput, string pcInput, int fps, string seg, string delayInput = null)
+        {
+            // -loglevel info prints the "Input #0" line that times the picture's start (see StartGapMeter);
+            // -stats every 0.5 s puts FFmpeg's progress into the recording log for diagnosis
+            var sb = new StringBuilder("-hide_banner -loglevel info -stats -stats_period 0.5 ");
+            bool mic = micInput != null, pcs = pcInput != null;
+            // Input order matters for sync. FFmpeg times each input from its own first packet. The screen goes
+            // first: its first frame is grabbed while it is opened, so the picture's clock is fixed before the
+            // sound pipe connects, and a slow screen-capture start-up can't leave the sound ahead of the picture.
+            // (The PC sound pipe is opened with a tiny probe, so FFmpeg doesn't sit reading seconds of it first.)
+            // -analyzeduration 0: FFmpeg stops studying the screen input after its first frame, so the sound pipe
+            // is opened about one frame after the picture's clock starts (otherwise it reads several frames first)
+            sb.Append("-thread_queue_size 1024 -analyzeduration 0 -probesize 32 ").Append(videoInput);
+            int v = 0, n = 1, micIdx = -1, pcIdx = -1;
+            // tests only: an extra, unused input that is slow to open, to stand in for a slow screen-capture start
+            if (delayInput != null) { sb.Append("-thread_queue_size 1024 -probesize 32 -analyzeduration 0 ").Append(delayInput); n++; }
+            if (mic) { sb.Append("-thread_queue_size 1024 ").Append(micInput); micIdx = n++; }
+            if (pcs) { sb.Append("-thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fflags nobuffer ").Append(pcInput); pcIdx = n++; }
+            const string Stereo = "aformat=sample_rates=48000:channel_layouts=stereo";
+            var inv = CultureInfo.InvariantCulture;
+            if (mic && pcs)
+                sb.AppendFormat(inv, "-filter_complex \"[{0}:a]" + Stereo + "[m];[{1}:a]" + Stereo + "[p];[m][p]amix=inputs=2:duration=longest:normalize=0[a]\" -map {2}:v -map \"[a]\" -c:a pcm_s16le ", micIdx, pcIdx, v);
+            else if (mic || pcs)
+                sb.AppendFormat(inv, "-map {0}:v -map {1}:a -af " + Stereo + " -c:a pcm_s16le ", v, mic ? micIdx : pcIdx);
+            else sb.AppendFormat(inv, "-map {0}:v ", v);
+            sb.Append(VideoQuality.LosslessCapture);
+            sb.AppendFormat(CultureInfo.InvariantCulture, "-g {0} -y ", fps * 2);
+            sb.Append(FFmpeg.Quote(seg));
+            return sb.ToString();
+        }
+
         /// <summary>Ends the current segment gracefully (FFmpeg finishes the file).</summary>
         public void StopSegment()
         {
@@ -105,46 +213,129 @@ namespace StillsAndReels
             proc = null;
             segClock.Stop();
             before += segClock.Elapsed.TotalSeconds;
+            var last = segments[segments.Count - 1];
+            var pcLog = pc;
+            if (pcLog != null) lock (diagLogs) { StringBuilder d; if (diagLogs.TryGetValue(last, out d)) lock (d) d.AppendFormat(CultureInfo.InvariantCulture, "stop: pc sound connected {0:0.000} s ago\n", pcLog.SecondsSinceConnect); }
+            StopPc(); // FFmpeg sees the end of the PC sound, then "q" ends the picture
             try { p.StandardInput.Write("q"); p.StandardInput.Flush(); } catch { }
             try { if (!p.WaitForExit(8000)) FFmpeg.KillQuietly(p); } catch { }
             try { p.Dispose(); } catch { }
-            var last = segments[segments.Count - 1];
+            WriteDiagLog(last);
             try { if (!File.Exists(last) || new FileInfo(last).Length < 1024) { segments.Remove(last); ImageCache.Delete(last); } } catch { }
         }
 
-        /// <summary>Joins the segments into one MP4 (no re-encoding). Returns its path in the cache.</summary>
-        public string Finish()
+        /// <summary>
+        /// Joins the lossless segments and encodes them once into an MP4 (H.264 4:2:0, BT.709, AAC) in the cache.
+        /// Runs FFmpeg for a while on long recordings, so call it off the UI thread; progress gets 0..1.
+        /// Returns the file's path. Throws OperationCanceledException if Discard was called meanwhile.
+        /// </summary>
+        public string Finish(Action<double> progress = null)
         {
             StopSegment();
             if (segments.Count == 0) throw new InvalidOperationException("Nothing was recorded.");
+            double total = Math.Max(0.1, before);
+            var inv = CultureInfo.InvariantCulture;
             string list = Path.Combine(MediaLibrary.Folder, "rec-" + Guid.NewGuid().ToString("N") + ".txt");
             var sb = new StringBuilder();
             foreach (var s in segments) sb.Append("file '").Append(s.Replace("\\", "/").Replace("'", "'\\''")).Append("'\n");
             File.WriteAllText(list, sb.ToString(), new UTF8Encoding(false));
-            string outPath = Path.Combine(MediaLibrary.Folder, "Recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss", CultureInfo.InvariantCulture) + ".mp4");
-            string args = "-hide_banner -nostdin -loglevel error -f concat -safe 0 -protocol_whitelist file -i " + FFmpeg.Quote(list) +
-                          " -c copy -movflags +faststart -y " + FFmpeg.Quote(outPath);
-            string err;
-            using (var p = FFmpeg.Start(args))
+            string outPath = Path.Combine(MediaLibrary.Folder, "Recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss", inv) + ".mp4");
+            string args = "-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -f concat -safe 0 -protocol_whitelist file -i " + FFmpeg.Quote(list) + " " +
+                          "-map 0:v:0 -map 0:a:0? " + VideoQuality.H264FromRgb(VideoQuality.RecordingCrf, VideoQuality.RecordingPreset) +
+                          string.Format(inv, "-c:a aac -b:a {0}k -movflags +faststart -y ", VideoQuality.RecordingAudioKbps) + FFmpeg.Quote(outPath);
+            var err = new StringBuilder();
+            int exit = -1;
+            try
             {
-                var e = p.StandardError.ReadToEndAsync();
-                p.StandardOutput.ReadToEnd();
-                p.WaitForExit(60000);
-                err = e.Result;
+                using (var p = FFmpeg.Start(args))
+                {
+                    finishProc = p;
+                    if (discarded) FFmpeg.KillQuietly(p);
+                    p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (err) { if (err.Length < 6000) err.AppendLine(e.Data); } };
+                    p.BeginErrorReadLine();
+                    string line;
+                    var r = p.StandardOutput;
+                    while ((line = r.ReadLine()) != null)
+                    {
+                        // -progress writes key=value lines; out_time_us is how far the encode has got
+                        if (progress == null || !line.StartsWith("out_time_us=", StringComparison.Ordinal)) continue;
+                        long us;
+                        if (long.TryParse(line.Substring(12), NumberStyles.Integer, inv, out us) && us > 0) progress(Math.Min(1, us / 1e6 / total));
+                    }
+                    p.WaitForExit();
+                    exit = p.ExitCode;
+                }
             }
-            ImageCache.Delete(list);
-            if (!File.Exists(outPath)) throw new IOException(FFmpeg.LastMeaningfulLine(err) ?? "The recording couldn't be saved.");
+            catch (Exception) { if (!discarded) throw; }
+            finally { finishProc = null; ImageCache.Delete(list); }
+            if (discarded) { ImageCache.Delete(outPath); throw new OperationCanceledException(); }
+            if (exit != 0 || !File.Exists(outPath))
+            {
+                ImageCache.Delete(outPath);
+                string detail;
+                lock (err) detail = FFmpeg.LastMeaningfulLine(err.ToString());
+                throw new IOException(detail ?? "The recording couldn't be saved.");
+            }
             foreach (var s in segments) ImageCache.Delete(s);
             segments.Clear();
             before = 0;
             return outPath;
         }
 
+        /// <summary>Free space where recordings are written (lossless segments can be large for busy screens).</summary>
+        public static long FreeBytes()
+        {
+            try { return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(MediaLibrary.Folder))).AvailableFreeSpace; }
+            catch { return long.MaxValue; }
+        }
+
+        // Diagnostic log of every recording segment, appended to %LOCALAPPDATA%\StillsAndReels\recording-log.txt
+        // (the cache is wiped when the app closes, so it lives outside it). Trimmed when it passes 2 MB.
+        readonly Dictionary<string, StringBuilder> diagLogs = new Dictionary<string, StringBuilder>();
+        readonly Dictionary<string, PcSoundCapture> diagPc = new Dictionary<string, PcSoundCapture>();
+
+        public static string LogPath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StillsAndReels", "recording-log.txt"); }
+        }
+
+        void WriteDiagLog(string seg)
+        {
+            StringBuilder d; PcSoundCapture c;
+            if (!diagLogs.TryGetValue(seg, out d)) return;
+            diagLogs.Remove(seg);
+            diagPc.TryGetValue(seg, out c); diagPc.Remove(seg);
+            try
+            {
+                lock (d)
+                {
+                    if (c != null) d.AppendFormat(CultureInfo.InvariantCulture, "pc sound: connected {0:0.000} s before stop; picture lead {1}; silence inserted {2:0.000} s\n",
+                        c.SecondsSinceConnect, double.IsNaN(c.Gap.Lead) ? "not measured" : c.Gap.Lead.ToString("0.000", CultureInfo.InvariantCulture) + " s", c.Gap.Inserted);
+                    string path = LogPath;
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    try { var fi = new FileInfo(path); if (fi.Exists && fi.Length > 2 << 20) fi.Delete(); } catch { }
+                    File.AppendAllText(path, "=== " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + Path.GetFileName(seg) + "\n" + d + "\n");
+                }
+            }
+            catch { }
+        }
+
+        void StopPc()
+        {
+            var c = pc;
+            pc = null;
+            if (c != null) c.Dispose();
+        }
+
         public void Discard()
         {
+            discarded = true;
             var p = proc;
             proc = null;
             FFmpeg.KillQuietly(p);
+            StopPc();
+            var f = finishProc;
+            if (f != null) try { if (!f.HasExited) f.Kill(); } catch { }
             foreach (var s in segments) ImageCache.Delete(s);
             segments.Clear();
             before = 0;
@@ -274,7 +465,7 @@ namespace StillsAndReels
         readonly ThemedPanel content = new ThemedPanel { Surface = Surface.Canvas, Dock = DockStyle.Fill };
         readonly ThemedPanel actions = new ThemedPanel { Surface = Surface.Bar, BorderTop = true, Dock = DockStyle.Bottom, Height = 1, Visible = false };
         readonly VideoView view = new VideoView { Dock = DockStyle.Fill };
-        readonly ThemedButton record, area, screenBtn, cursorBtn, micBtn, fpsBtn;
+        readonly ThemedButton record, area, screenBtn, cursorBtn, micBtn, pcBtn, fpsBtn;
         readonly ThemedButton addBtn, saveBtn, discardBtn;
         readonly Func<string, bool, bool> addToEditor;  // (path, temporary) -> added
         bool regionMode = true;
@@ -282,19 +473,47 @@ namespace StillsAndReels
         bool cursor = true;
         int fps = 30;
         string mic;
+        bool pcSound = true;
         List<string> mics;
+
+        void Remember()
+        {
+            if (settings == null) return;
+            settings.Set("VideoSnip.PcSound", pcSound);
+            settings.Set("VideoSnip.Cursor", cursor);
+            settings.Set("VideoSnip.Fps", fps);
+            settings.Set("VideoSnip.Mic", mic ?? "");
+            try { settings.Save(); } catch { }
+        }
         ScreenRecorder rec;
         RecordBar recBar;
         RegionFrame frame;
         bool paused;
+        bool finishing;         // the recording is being encoded into its MP4
+        readonly System.Windows.Forms.Timer diskTimer = new System.Windows.Forms.Timer { Interval = 3000 };
+        const long MinFreeToStart = 1L << 30, MinFreeToContinue = 600L << 20;
+        double finishProgress;
         string resultPath;      // the recording (in the cache)
         string savedPath;       // where the user saved it, if they did
         bool added;
 
-        public VideoSnipForm(Form host, Func<string, bool, bool> addToEditor)
+        readonly Settings settings;
+
+        public VideoSnipForm(Form host, Settings settings, Func<string, bool, bool> addToEditor)
         {
             this.host = host;
+            this.settings = settings;
             this.addToEditor = addToEditor;
+            // the last choices are kept; PC sound starts on, since most recordings want the sound of what's playing
+            if (settings != null)
+            {
+                pcSound = settings.GetBool("VideoSnip.PcSound", true);
+                cursor = settings.GetBool("VideoSnip.Cursor", true);
+                int f = settings.GetInt("VideoSnip.Fps", 30);
+                fps = f == 15 || f == 60 ? f : 30;
+                string m = settings.GetString("VideoSnip.Mic", "");
+                mic = string.IsNullOrEmpty(m) ? null : m;
+            }
             Text = "Video snip";
             ShowInTaskbar = false;
             MinimizeBox = false;
@@ -314,9 +533,10 @@ namespace StillsAndReels
             area = Btn(Ico.RectSelect, "Area", "Record a part of the screen you choose", (s, e) => { regionMode = true; fixedScreen = null; Sync(); }, 84);
             screenBtn = Btn(Ico.Screen, "Full screen", "Record a whole screen", (s, e) => ChooseScreen(), 118);
             Sep();
-            cursorBtn = Btn(Ico.Pointer, null, "Show the mouse pointer in the recording", (s, e) => { cursor = !cursor; Sync(); }, 40);
-            micBtn = Btn(Ico.Mic, "No sound", "Record a microphone", (s, e) => ChooseMic(), 150);
-            fpsBtn = Btn(Ico.Speed, "30 fps", "Frames per second", (s, e) => { fps = fps == 30 ? 60 : fps == 60 ? 15 : 30; Sync(); }, 84);
+            cursorBtn = Btn(Ico.Pointer, null, "Show the mouse pointer in the recording", (s, e) => { cursor = !cursor; Remember(); Sync(); }, 40);
+            micBtn = Btn(Ico.Mic, "No mic", "Record a microphone", (s, e) => ChooseMic(), 150);
+            pcBtn = Btn(Ico.Volume, "PC sound", "Also record what the PC plays: videos, music, games and calls", (s, e) => { pcSound = !pcSound; Remember(); Sync(); }, 116);
+            fpsBtn = Btn(Ico.Speed, "30 fps", "Frames per second", (s, e) => { fps = fps == 30 ? 60 : fps == 60 ? 15 : 30; Remember(); Sync(); }, 84);
 
             addBtn = new ThemedButton { Icon = Ico.Video, Text = "Add to video editor", Primary = true, Tip = "Put the recording in the editor's media and on the timeline" };
             addBtn.Click += (s, e) => AddToEditor();
@@ -336,13 +556,24 @@ namespace StillsAndReels
             Controls.Add(bar);
 
             var wa = Screen.FromControl(host).WorkingArea;
-            int w = Theme.S(760), h = Theme.S(520);
+            int w = Theme.S(860), h = Theme.S(520);
             int x = host.Right + Theme.S(8);
             if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w - Theme.S(16));
             int y = Math.Max(wa.Top, Math.Min(host.Top + Theme.S(60), wa.Bottom - h));
             Bounds = new Rectangle(x, y, w, h);
             Theme.Changed += OnTheme;
+            diskTimer.Tick += (s, e) => CheckDisk();
+            diskTimer.Start();
             Sync();
+        }
+
+        /// <summary>Stops (and keeps) a recording before the disk fills up.</summary>
+        void CheckDisk()
+        {
+            if (rec == null || !rec.IsRecording || finishing) return;
+            if (ScreenRecorder.FreeBytes() >= MinFreeToContinue) return;
+            StopRecording();
+            MessageBox.Show(this, "Your disk is nearly full, so the recording was stopped. What was recorded so far is kept.", "Video snip", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         void OnTheme(object s, EventArgs e) { flow.BackColor = Theme.Current.Bar; Theme.ApplyTo(this); }
@@ -354,6 +585,7 @@ namespace StillsAndReels
             if (disposing)
             {
                 Theme.Changed -= OnTheme;
+                diskTimer.Dispose();
                 CloseRecordingUi();
                 if (rec != null) rec.Dispose();
                 view.Player.Unload();
@@ -409,12 +641,13 @@ namespace StillsAndReels
 
         void Sync()
         {
-            bool busy = rec != null && (rec.IsRecording || paused);
+            bool busy = finishing || rec != null && (rec.IsRecording || paused);
             area.Checked = regionMode;
             screenBtn.Checked = !regionMode;
             screenBtn.Text = !regionMode && fixedScreen.HasValue ? ScreenName(fixedScreen.Value) : "Full screen";
             cursorBtn.Checked = cursor;
-            micBtn.Text = string.IsNullOrEmpty(mic) ? "No sound" : mic;
+            micBtn.Text = string.IsNullOrEmpty(mic) ? "No mic" : mic;
+            pcBtn.Checked = pcSound;
             micBtn.Checked = !string.IsNullOrEmpty(mic);
             fpsBtn.Text = fps + " fps";
             foreach (Control c in flow.Controls) c.Enabled = !busy;
@@ -464,16 +697,16 @@ namespace StillsAndReels
                 try { mics = ScreenRecorder.Microphones(); } finally { Cursor = Cursors.Default; }
             }
             var menu = new ContextMenuStrip();
-            menu.Items.Add(new ToolStripMenuItem("No sound", null, (o, e) => { mic = null; Sync(); }) { Checked = mic == null });
+            menu.Items.Add(new ToolStripMenuItem("No microphone", null, (o, e) => { mic = null; Remember(); Sync(); }) { Checked = mic == null });
             foreach (var m in mics)
             {
                 string mm = m;
-                menu.Items.Add(new ToolStripMenuItem(mm, null, (o, e) => { mic = mm; Sync(); }) { Checked = mic == mm });
+                menu.Items.Add(new ToolStripMenuItem(mm, null, (o, e) => { mic = mm; Remember(); Sync(); }) { Checked = mic == mm });
             }
             if (mics.Count == 0)
                 menu.Items.Add(new ToolStripMenuItem("No microphone found") { Enabled = false });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add(new ToolStripMenuItem("Computer sound isn't recorded (only a microphone, or \"Stereo Mix\" if Windows offers it)") { Enabled = false });
+            menu.Items.Add(new ToolStripMenuItem("For the PC's own sound, use the PC sound button") { Enabled = false });
             menu.Closed += (o, e) => BeginInvoke((MethodInvoker)menu.Dispose);
             Ui.ShowMenuBelow(menu, micBtn);
         }
@@ -482,7 +715,8 @@ namespace StillsAndReels
         {
             if (view.Visible) return;
             string title, detail;
-            if (rec != null && (rec.IsRecording || paused)) { title = paused ? "Recording paused" : "Recording…"; detail = "Use the bar on screen to pause or stop."; }
+            if (finishing) { title = "Finishing the recording… " + (int)Math.Round(finishProgress * 100) + "%"; detail = "Encoding it in high quality. Long recordings take a little while."; }
+            else if (rec != null && (rec.IsRecording || paused)) { title = paused ? "Recording paused" : "Recording…"; detail = "Use the bar on screen to pause or stop."; }
             else
             {
                 title = "Record your screen";
@@ -509,7 +743,7 @@ namespace StillsAndReels
 
         void StartRecording()
         {
-            if (rec != null && (rec.IsRecording || paused)) return;
+            if (finishing || rec != null && (rec.IsRecording || paused)) return;
             if (!ConfirmDiscard()) return;
             Discard(false);
             Rectangle region;
@@ -523,7 +757,12 @@ namespace StillsAndReels
             if (region.Width < 32 || region.Height < 32) { MessageBox.Show(this, "That area is too small to record.", "Video snip"); return; }
             try { FFmpeg.Locate(); }
             catch (Exception ex) { MessageBox.Show(this, ex.Message, "Video snip", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-            rec = new ScreenRecorder { Region = region, Fps = fps, ShowCursor = cursor, Microphone = mic };
+            if (ScreenRecorder.FreeBytes() < MinFreeToStart)
+            {
+                MessageBox.Show(this, "There's less than 1 GB free on the disk that holds the app's cache, so recording can't start. Free up some space and try again.", "Video snip", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            rec = new ScreenRecorder { Region = region, Fps = fps, ShowCursor = cursor, Microphone = mic, PcSound = pcSound };
             rec.Failed += msg => BeginInvoke((MethodInvoker)(() => OnRecorderFailed(msg)));
             Countdown(region, () =>
             {
@@ -616,19 +855,38 @@ namespace StillsAndReels
 
         void StopRecording()
         {
-            if (rec == null) return;
+            if (rec == null || finishing) return;
             CloseRecordingUi();
             Show();
             Activate();
-            Cursor = Cursors.WaitCursor;
-            string path = null;
-            Exception error = null;
-            try { path = rec.Finish(); }
-            catch (Exception ex) { error = ex; }
-            finally { Cursor = Cursors.Default; }
+            var r = rec;
+            finishing = true;
+            finishProgress = 0;
+            paused = false;
+            Sync();
+            // the lossless segments are encoded once into the final MP4; that can take a while, so off the UI thread
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string path = null;
+                Exception error = null;
+                try { path = r.Finish(p => Post(() => { finishProgress = p; content.Invalidate(); })); }
+                catch (Exception ex) { error = ex; }
+                Post(() => FinishDone(r, path, error));
+            });
+        }
+
+        void Post(Action a)
+        {
+            try { if (IsHandleCreated && !IsDisposed) BeginInvoke(a); } catch (InvalidOperationException) { }
+        }
+
+        void FinishDone(ScreenRecorder r, string path, Exception error)
+        {
+            if (!ReferenceEquals(rec, r)) { if (path != null) ImageCache.Delete(path); return; } // discarded meanwhile
+            finishing = false;
             rec.Dispose();
             rec = null;
-            paused = false;
+            if (error is OperationCanceledException) { Sync(); return; }
             if (error != null)
             {
                 Sync();
@@ -725,7 +983,19 @@ namespace StillsAndReels
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (rec != null && (rec.IsRecording || paused))
+            if (finishing)
+            {
+                if (e.CloseReason == CloseReason.UserClosing)
+                {
+                    var r = MessageBox.Show(this, "The recording is still being finished. Stop and discard it?", "Video snip", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+                    if (r != DialogResult.OK) { e.Cancel = true; return; }
+                }
+                finishing = false;
+                var fr = rec;
+                rec = null;
+                if (fr != null) fr.Discard();
+            }
+            else if (rec != null && (rec.IsRecording || paused))
             {
                 var r = MessageBox.Show(this, "Stop and discard the recording in progress?", "Video snip", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
                 if (r != DialogResult.OK) { e.Cancel = true; return; }

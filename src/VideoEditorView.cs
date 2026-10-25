@@ -821,6 +821,7 @@ namespace StillsAndReels
             StopPlayback();
             BeginChange(null);
             EnsureRef(m);
+            bool matched = MatchCanvasToFirstVideo(m);
             var c = NewClip(m);
             var main = project.Main;
             if (!atPlayhead || main.Clips.Count == 0)
@@ -832,7 +833,26 @@ namespace StillsAndReels
             Changed();
             Select(c, false);
             if (!atPlayhead) Timeline.EnsureVisible(c.Start);
-            Say("Added " + m.Name);
+            Say("Added " + m.Name + (matched ? " – canvas set to " + project.Width + " × " + project.Height + ", " + Math.Round(project.Fps, 2) + " fps to match it" : ""));
+        }
+
+        /// <summary>
+        /// The first video put on an untouched project (default canvas, nothing on the video tracks) sets the
+        /// canvas size and frame rate, so its pictures are never scaled or retimed on export. Call inside a change.
+        /// </summary>
+        bool MatchCanvasToFirstVideo(MediaItem m)
+        {
+            if (m.Kind != MediaKind.Video || m.Info == null || !m.Info.HasVideo) return false;
+            var fresh = new Project();
+            if (project.Width != fresh.Width || project.Height != fresh.Height || Math.Abs(project.Fps - fresh.Fps) > 0.001) return false;
+            if (project.Tracks.Any(t => t.Kind == TrackKind.Video && t.Clips.Count > 0)) return false;
+            var s = m.PixelSize;
+            if (s.Width < 16 || s.Height < 16) return false;
+            double k = Math.Min(1, 3840.0 / Math.Max(s.Width, s.Height));
+            project.Width = Math.Max(16, (int)(s.Width * k) & ~1);
+            project.Height = Math.Max(16, (int)(s.Height * k) & ~1);
+            if (m.Info.Fps >= 1 && m.Info.Fps <= 120) project.Fps = Math.Round(m.Info.Fps, 3);
+            return true;
         }
 
         /// <summary>Inserts into the main track at time t: after the clip under t (or exactly at a join).</summary>
@@ -910,6 +930,7 @@ namespace StillsAndReels
             StopPlayback();
             BeginChange(null);
             EnsureRef(m);
+            if (MatchCanvasToFirstVideo(m)) Say("Canvas set to " + project.Width + " × " + project.Height + ", " + Math.Round(project.Fps, 2) + " fps to match " + m.Name);
             var c = NewClip(m);
             bool audio = c.Kind == ClipKind.Audio;
             TrackKind kind = audio ? TrackKind.Audio : TrackKind.Video;
