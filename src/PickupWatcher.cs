@@ -335,9 +335,9 @@ namespace StillsAndReels
                 if (b.Width < 64 || b.Height < 64 || (long)b.Width * b.Height > maxArea || !b.Contains(pt)) continue;
                 var vis = Rectangle.Intersect(b, area);
                 if (vis.Width < 64 || vis.Height < 64) continue;
-                if (LooksLikePhoto(shot, new Rectangle(vis.X - area.X, vis.Y - area.Y, vis.Width, vis.Height)))
+                if (LooksLikePicture(shot, new Rectangle(vis.X - area.X, vis.Y - area.Y, vis.Width, vis.Height)))
                 {
-                    how += "; element that looks like a photo";
+                    how += "; element that looks like a picture";
                     name = null;
                     return b;
                 }
@@ -345,7 +345,7 @@ namespace StillsAndReels
             // 3. from the pixels
             var local = PictureBlock(shot, new Point(pt.X - area.X, pt.Y - area.Y));
             if (!local.IsEmpty && (long)local.Width * local.Height <= (long)area.Width * area.Height * 8 / 10
-                && LooksLikePhoto(shot, local))
+                && LooksLikePicture(shot, local))
             {
                 how += "; picture found on screen";
                 name = null;
@@ -403,6 +403,73 @@ namespace StillsAndReels
         {
             try { object r = acc.get_accRole(child ?? 0); return r is int ? "role 0x" + ((int)r).ToString("X") : "role ?"; }
             catch { return "role ?"; }
+        }
+
+        /// <summary>A photo, or a product shot (an object on a plain background, as shops show bikes and clothes).</summary>
+        internal static bool LooksLikePicture(Bitmap bmp, Rectangle r)
+        {
+            return LooksLikePhoto(bmp, r) || LooksLikeObject(bmp, r);
+        }
+
+        /// <summary>
+        /// True when the area is mostly one plain background with one big connected shape on it, like a product
+        /// photo. Text is many small shapes in thin rows, so it doesn't count; neither do small icons.
+        /// </summary>
+        internal static bool LooksLikeObject(Bitmap bmp, Rectangle r)
+        {
+            r.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height));
+            if (r.Width < 64 || r.Height < 64) return false;
+            const int n = 64;
+            int cw = Math.Max(1, r.Width / n), ch = Math.Max(1, r.Height / n);
+            int gw = r.Width / cw, gh = r.Height / ch;
+            int bg = bmp.GetPixel(r.X + 1, r.Y + 1).ToArgb();   // the corner is background in a product shot
+            var busy = new bool[gw, gh];
+            int busyCount = 0;
+            for (int gy = 0; gy < gh; gy++)
+                for (int gx = 0; gx < gw; gx++)
+                {
+                    bool b = false;
+                    int step = Math.Max(1, Math.Min(cw, ch) / 3);
+                    for (int y = 0; y < ch && !b; y += step)
+                        for (int x = 0; x < cw && !b; x += step)
+                        {
+                            int c = bmp.GetPixel(r.X + gx * cw + x, r.Y + gy * ch + y).ToArgb();
+                            b = Math.Abs(((c >> 16) & 255) - ((bg >> 16) & 255)) > 24 || Math.Abs(((c >> 8) & 255) - ((bg >> 8) & 255)) > 24
+                                || Math.Abs((c & 255) - (bg & 255)) > 24;
+                        }
+                    busy[gx, gy] = b;
+                    if (b) busyCount++;
+                }
+            if (busyCount < gw * gh / 20) return false;   // nearly empty
+            // the largest connected shape
+            var seen = new bool[gw, gh];
+            var stack = new Stack<Point>();
+            int best = 0, bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+            for (int sy = 0; sy < gh; sy++)
+                for (int sx = 0; sx < gw; sx++)
+                {
+                    if (!busy[sx, sy] || seen[sx, sy]) continue;
+                    int size = 0, x0 = sx, y0 = sy, x1 = sx, y1 = sy;
+                    seen[sx, sy] = true;
+                    stack.Push(new Point(sx, sy));
+                    while (stack.Count > 0)
+                    {
+                        var p = stack.Pop();
+                        size++;
+                        x0 = Math.Min(x0, p.X); x1 = Math.Max(x1, p.X); y0 = Math.Min(y0, p.Y); y1 = Math.Max(y1, p.Y);
+                        for (int dy = -1; dy <= 1; dy++)
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                int qx = p.X + dx, qy = p.Y + dy;
+                                if (qx < 0 || qy < 0 || qx >= gw || qy >= gh || seen[qx, qy] || !busy[qx, qy]) continue;
+                                seen[qx, qy] = true;
+                                stack.Push(new Point(qx, qy));
+                            }
+                    }
+                    if (size > best) { best = size; bx0 = x0; by0 = y0; bx1 = x1; by1 = y1; }
+                }
+            int spanW = bx1 - bx0 + 1, spanH = by1 - by0 + 1;
+            return best * 100 >= busyCount * 60 && spanW * 100 >= gw * 35 && spanH * 100 >= gh * 35;
         }
 
         /// <summary>

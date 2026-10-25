@@ -56,6 +56,17 @@ class T {
     Check(txt.IsEmpty || !(bool)LooksLikePhoto.Invoke(null,new object[]{page,txt}),"text is not a picture: "+txt);
     Check(((Rectangle)PictureBlock.Invoke(null,new object[]{page,new Point(800,100)})).IsEmpty,"plain background gives nothing");
     Check(!(bool)LooksLikePhoto.Invoke(null,new object[]{page,new Rectangle(0,0,900,280)}),"text area with background is not a photo");
+    // a product shot: a dark bike-like shape on white, next to a block of text
+    var shop=new Bitmap(800,400);
+    using(var g=Graphics.FromImage(shop)){ g.Clear(Color.White); var pen=new Pen(Color.FromArgb(40,40,40),5);
+      g.DrawEllipse(pen,40,180,140,140); g.DrawEllipse(pen,260,180,140,140); g.DrawLine(pen,110,250,200,140); g.DrawLine(pen,200,140,330,250);
+      g.DrawLine(pen,200,140,170,250); g.DrawLine(pen,110,250,170,250); g.DrawLine(pen,170,250,330,250); g.DrawLine(pen,190,120,230,120);
+      for(int i=0;i<8;i++) g.DrawString("Ribble Allroad SL - Enthusiast "+i, new Font(FontFamily.GenericSansSerif,11), Brushes.Black, 460, 40+i*22); }
+    Check((bool)pw.GetMethod("LooksLikePicture",SF).Invoke(null,new object[]{shop,new Rectangle(10,90,420,260)}),"product shot on white counts as a picture");
+    Check(!(bool)pw.GetMethod("LooksLikePicture",SF).Invoke(null,new object[]{shop,new Rectangle(450,30,340,200)}),"text block is still not a picture");
+    Check(!(bool)pw.GetMethod("LooksLikePicture",SF).Invoke(null,new object[]{page,new Rectangle(0,0,900,280)}),"page text is still not a picture");
+    var sb=(Rectangle)PictureBlock.Invoke(null,new object[]{shop,new Point(200,141)});
+    Check(!sb.IsEmpty && sb.Width>250 && (bool)pw.GetMethod("LooksLikePicture",SF).Invoke(null,new object[]{shop,sb}),"clicking the bike finds the bike: "+sb);
     var desk=(System.Collections.Generic.List<string>)pw.GetMethod("DesktopFolders",SF).Invoke(null,null);
     Check(desk!=null,"desktop folders listed: "+desk.Count);
     cache.GetMethod("Shutdown").Invoke(null,null);
