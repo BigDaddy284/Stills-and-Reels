@@ -403,7 +403,7 @@ namespace StillsAndReels
         public string OutPath;
         public int Width, Height;
         public double Fps = 30;
-        public int Crf = 20;
+        public int Crf = 18;
         public string Preset = "medium";
         public bool AudioOnly;
         public int AudioKbps = 192;
@@ -523,7 +523,7 @@ namespace StillsAndReels
             if (hasSound) sb.Append("-protocol_whitelist file -i ").Append(FFmpeg.Quote(wav)).Append(' ');
             sb.Append("-map 0:v:0 ");
             if (hasSound) sb.Append("-map 1:a:0 ");
-            sb.AppendFormat(inv, "-c:v libx264 -preset {0} -crf {1} -pix_fmt yuv420p -profile:v high ", settings.Preset, settings.Crf);
+            sb.Append(VideoQuality.H264FromRgb(settings.Crf, settings.Preset));
             if (hasSound) sb.AppendFormat(inv, "-c:a aac -b:a {0}k ", settings.AudioKbps);
             sb.AppendFormat(inv, "-movflags +faststart -t {0:0.###} -y ", duration);
             sb.Append(FFmpeg.Quote(settings.OutPath));

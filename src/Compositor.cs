@@ -461,7 +461,7 @@ namespace StillsAndReels
                 if (gen != cancelGen || IsCancelled()) return null;
                 try
                 {
-                    frame = FrameGrabber.Grab(m.SourcePath, Math.Max(0, tt), size, SourceFilters.Pre(c, false), p => { lock (procLock) current = p; });
+                    frame = FrameGrabber.Grab(m.SourcePath, Math.Max(0, tt), size, SourceFilters.Pre(c, false), p => { lock (procLock) current = p; }, m.Info);
                 }
                 catch { frame = null; }
                 lock (procLock) current = null;
@@ -523,7 +523,7 @@ namespace StillsAndReels
         public readonly Bitmap Bitmap;
         public int LastUsed;
 
-        public ClipStream(string key, Clip c, MediaItem m, double t0, double fps, Size size)
+        public ClipStream(string key, Clip c, MediaItem m, double t0, double fps, Size size, bool sharp)
         {
             Key = key;
             this.fps = fps;
@@ -535,8 +535,8 @@ namespace StillsAndReels
             double src = Math.Max(0, c.SourceTime(T0));
             string pre = SourceFilters.Pre(c, true);
             string vf = string.Format(CultureInfo.InvariantCulture,
-                "{0}setpts=(PTS-STARTPTS)/{1:0.#####},fps={2:0.###},scale={3}:{4}:flags=bilinear,format=bgra",
-                pre.Length > 0 ? pre + "," : "", c.Speed, fps, width, height);
+                "{0}setpts=(PTS-STARTPTS)/{1:0.#####},fps={2:0.###},{3}",
+                pre.Length > 0 ? pre + "," : "", c.Speed, fps, VideoQuality.ToBgra(width, height, sharp, m.Info));
             string args = FFmpeg.InputArgs(m.SourcePath, src) + "-map 0:v:0 -an -sn -dn -vf \"" + vf + "\" -f rawvideo -pix_fmt bgra pipe:1";
             proc = FFmpeg.Start(args);
             proc.BeginErrorReadLine();
@@ -657,7 +657,7 @@ namespace StillsAndReels
             }
             if (s == null)
             {
-                s = new ClipStream(key, c, m, t, fps, size);
+                s = new ClipStream(key, c, m, t, fps, size, export);
                 streams[c.Id] = s;
             }
             s.LastUsed = frame;
@@ -983,7 +983,7 @@ namespace StillsAndReels
         public void Render(Graphics g, float cw, float ch, double t, IFrameSource src)
         {
             g.Clear(Color.FromArgb(project.Background));
-            g.InterpolationMode = HighQuality ? InterpolationMode.HighQualityBilinear : InterpolationMode.Bilinear;
+            g.InterpolationMode = HighQuality ? InterpolationMode.HighQualityBicubic : InterpolationMode.Bilinear;
             g.PixelOffsetMode = PixelOffsetMode.Half;
             g.CompositingQuality = HighQuality ? CompositingQuality.HighQuality : CompositingQuality.HighSpeed;
             src.BeginFrame();
@@ -1132,9 +1132,28 @@ namespace StillsAndReels
                 var bs = BaseSize(c, mi, cw, ch);
                 var st = g.Save();
                 g.MultiplyTransform(m);
-                g.DrawImage(draw, new RectangleF(-bs.Width / 2, -bs.Height / 2, bs.Width, bs.Height),
-                    new RectangleF(0, 0, draw.Width, draw.Height), GraphicsUnit.Pixel);
+                // a frame that lands pixel for pixel on the canvas is copied exactly instead of resampled
+                if (IsPixelExact(g.Transform, bs, draw)) g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.TranslateTransform(-bs.Width / 2, -bs.Height / 2);
+                g.ScaleTransform(bs.Width / draw.Width, bs.Height / draw.Height);
+                // mirrored edges stop the resampler from blending the picture's border with transparency
+                edgeAttrs.SetWrapMode(WrapMode.TileFlipXY);
+                g.DrawImage(draw, new Rectangle(0, 0, draw.Width, draw.Height), 0, 0, draw.Width, draw.Height, GraphicsUnit.Pixel, edgeAttrs);
                 g.Restore(st);
+            }
+        }
+
+        readonly ImageAttributes edgeAttrs = new ImageAttributes();
+
+        static bool IsPixelExact(Matrix t, SizeF bs, Bitmap pic)
+        {
+            if (Math.Abs(bs.Width - pic.Width) > 0.01f || Math.Abs(bs.Height - pic.Height) > 0.01f) return false;
+            using (t)
+            {
+                var e = t.Elements;
+                if (Math.Abs(e[0] - 1) > 1e-4f || Math.Abs(e[3] - 1) > 1e-4f || Math.Abs(e[1]) > 1e-4f || Math.Abs(e[2]) > 1e-4f) return false;
+                float x = e[4] - bs.Width / 2, y = e[5] - bs.Height / 2;
+                return Math.Abs(x - Math.Round(x)) < 0.01 && Math.Abs(y - Math.Round(y)) < 0.01;
             }
         }
 

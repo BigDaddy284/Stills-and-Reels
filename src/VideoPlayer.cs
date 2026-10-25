@@ -212,9 +212,9 @@ namespace StillsAndReels
             if (info.HasVideo)
             {
                 string vf = string.Format(CultureInfo.InvariantCulture,
-                    "{0}fps={1:0.###},scale={2}:{3}:flags=bilinear,format=bgra",
+                    "{0}fps={1:0.###},{2}",
                     Math.Abs(speed - 1) > 0.001 ? string.Format(CultureInfo.InvariantCulture, "setpts=PTS/{0:0.####},", speed) : "",
-                    fps, width, height);
+                    fps, VideoQuality.ToBgra(width, height, false, info));
                 string args = FFmpeg.InputArgs(info.Path, start) + "-map 0:v:0 -an -sn -dn -vf \"" + vf + "\" -f rawvideo -pix_fmt bgra pipe:1";
                 vproc = FFmpeg.Start(args);
                 Drain(vproc);
@@ -686,8 +686,7 @@ namespace StillsAndReels
                 FFmpeg.KillQuietly(grabProc);
                 grabProc = null;
                 string args = FFmpeg.InputArgs(info.Path, t) +
-                    string.Format(CultureInfo.InvariantCulture, "-map 0:v:0 -an -sn -dn -frames:v 1 -vf \"scale={0}:{1}:flags=bilinear,format=bgra\" -f rawvideo -pix_fmt bgra pipe:1",
-                        size.Width, size.Height);
+                    "-map 0:v:0 -an -sn -dn -frames:v 1 -vf \"" + VideoQuality.ToBgra(size.Width, size.Height, true, info) + "\" -f rawvideo -pix_fmt bgra pipe:1";
                 try { p = FFmpeg.Start(args); }
                 catch (Exception ex) { RaiseFailed(ex.Message); return; }
                 grabProc = p;

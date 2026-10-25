@@ -20,6 +20,10 @@ namespace StillsAndReels
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool EnumChildWindows(IntPtr parent, EnumWindowsProc callback, IntPtr lParam);
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
 
@@ -51,5 +55,57 @@ namespace StillsAndReels
 
         [PreserveSig]
         int ContextSensitiveHelp([MarshalAs(UnmanagedType.Bool)] bool fEnterMode);
+    }
+
+    // IShellWindows - only FindWindowSW is called (to reach the desktop's view); the others hold vtable slots.
+    [ComImport, Guid("85CB6900-4D95-11CF-960C-0080C7F4EE85"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    internal interface IShellWindows
+    {
+        int Count { get; }
+        [return: MarshalAs(UnmanagedType.IDispatch)] object Item(object index);
+        [return: MarshalAs(UnmanagedType.IUnknown)] object _NewEnum();
+        void Register();
+        void RegisterPending();
+        void Revoke();
+        void OnNavigate();
+        void OnActivated();
+        [return: MarshalAs(UnmanagedType.IDispatch)]
+        object FindWindowSW(ref object pvarloc, ref object pvarlocRoot, int swClass, out int phwnd, int swfwOptions);
+    }
+
+    [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellBrowser
+    {
+        [PreserveSig] int GetWindow(out IntPtr phwnd);
+        [PreserveSig] int ContextSensitiveHelp(int fEnterMode);
+        [PreserveSig] int InsertMenusSB();
+        [PreserveSig] int SetMenuSB();
+        [PreserveSig] int RemoveMenusSB();
+        [PreserveSig] int SetStatusTextSB();
+        [PreserveSig] int EnableModelessSB();
+        [PreserveSig] int TranslateAcceleratorSB();
+        [PreserveSig] int BrowseObject();
+        [PreserveSig] int GetViewStateStream();
+        [PreserveSig] int GetControlWindow();
+        [PreserveSig] int SendControlMsg();
+        [PreserveSig] int QueryActiveShellView(out IShellView ppshv);
+    }
+
+    [ComImport, Guid("000214E3-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellView
+    {
+        [PreserveSig] int GetWindow(out IntPtr phwnd);
+        [PreserveSig] int ContextSensitiveHelp(int fEnterMode);
+        [PreserveSig] int TranslateAccelerator();
+        [PreserveSig] int EnableModeless();
+        [PreserveSig] int UIActivate();
+        [PreserveSig] int Refresh();
+        [PreserveSig] int CreateViewWindow();
+        [PreserveSig] int DestroyViewWindow();
+        [PreserveSig] int GetCurrentInfo();
+        [PreserveSig] int AddPropertySheetPages();
+        [PreserveSig] int SaveViewState();
+        [PreserveSig] int SelectItem();
+        [PreserveSig] int GetItemObject(uint uItem, ref Guid riid, [MarshalAs(UnmanagedType.IUnknown)] out object ppv);
     }
 }

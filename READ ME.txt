@@ -7,6 +7,53 @@ Stills & Reels 2.2
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
 
+Following clicks anywhere (new)
+- Pictures mode now also picks up a picture you click on a web page or in another app.
+  It is copied from the screen exactly as shown there (same size as on screen), because
+  the app never downloads anything. For the full-size original, right-click the picture
+  in your browser and choose "Copy image": copied pictures are picked up at full quality.
+- Files you click on the desktop or in an Open/Save dialog of any app are followed like
+  File Explorer clicks: pictures in Pictures mode, videos in Videos mode and the video editor.
+- Files you copy anywhere (Ctrl+C) are followed too.
+- Turn each of these on or off in Settings > Following. "Follow clicks and File Explorer
+  selection" in the View menu still switches all following off and on.
+- Pictures from web pages and copied pictures are never taken while you are in Edit picture,
+  and nothing is picked up while the video Snip window is open.
+- Clicks are only watched, never blocked or changed. The app doesn't record which
+  keys you press or anything about the pages you visit.
+
+Sharper video (new)
+- Video snip records the PC's own sound (videos, music, games, calls) by default; the PC sound
+  button in the Video snip bar turns it off. It works on its own or mixed with a microphone, and
+  records whatever plays on your default speakers or headphones. Your Video snip choices (PC
+  sound, microphone, frame rate, pointer) are remembered.
+- Sound and picture in a recording are lined up more tightly. The screen capture starts before
+  the sound; the app now times how long after the first frame the sound actually began and
+  shifts the sound by exactly that, so a slow start-up (for example a microphone that takes a
+  moment to open) no longer leaves the sound ahead of the picture or ending before it.
+- Each recording writes a short technical log to %LOCALAPPDATA%\StillsAndReels\recording-log.txt
+  (what FFmpeg reported and the measured picture lead). It contains no picture or sound, and you can
+  delete it at any time.
+- Screen recordings are captured losslessly while you record, then encoded once in high
+  quality when you press Stop ("Finishing the recording… 42%" shows while that runs).
+  Small text and thin lines stay crisp, and pausing no longer costs quality.
+- The screen is captured with Windows Desktop Duplication: whole frames straight from the
+  graphics card, so playing video doesn't tear and far fewer frames are dropped. Where that
+  isn't available (a remote desktop session, an area that spans two screens) the older
+  capture method is used instead.
+  While recording, the lossless parts are kept in the cache and can be large when the screen
+  shows a lot of movement (a full-screen video can take about 1 GB a minute). They are
+  deleted once the recording is finished, and recording stops by itself, keeping what it
+  has, if the disk gets nearly full.
+- Colours stay true: exports and recordings are written as standard HD colour (BT.709) and
+  labelled so, so players no longer shift reds, oranges and greens.
+- Videos in the editor are decoded with sharper scaling, and a clip that fills the canvas is
+  copied pixel for pixel instead of being resampled.
+- The first video you put on a new project sets the canvas size and frame rate to match it,
+  so a 4K or 60 fps clip (or a 1366 × 768 screen recording) is no longer squeezed to 1080p 30.
+- Export offers the project's exact size and frame rate (chosen by default), and the quality
+  choices now run Smaller file, Standard, High (default) and Best.
+
 What's new in 2.2
 - The app is now called Stills & Reels.
 - Your settings carry over from Picture Preview automatically on first run.
@@ -37,7 +84,8 @@ Video editor at a glance
   Ctrl+D duplicates, Ctrl+K adds a keyframe, Ctrl+wheel zooms, Ctrl+Z undoes.
 - File > Save video project (Ctrl+S) saves a .srproj file. It remembers where your files are.
   Older .ppvproj projects also open.
-- Export (top right, or Ctrl+M): MP4 (H.264 + AAC) at 480p-4K, 24-60 fps, or MP3 sound only.
+- Export (top right, or Ctrl+M): MP4 (H.264 + AAC) at the project's size or 480p-4K, at the
+  project's frame rate or 24-60 fps, or MP3 sound only.
 
 The media cache
 - Every video you view (and every file you import) is copied into a private cache folder
@@ -56,7 +104,8 @@ Video engine
 The first time you use a video feature, the app unpacks its built-in video engine (FFmpeg 7.1)
 to %LOCALAPPDATA%\StillsAndReels\Engine (about 85 MB, takes a few seconds, once only).
 The app starts it in the background; you never run it yourself. It is only given local
-file paths (and, when you record, your screen and the microphone you choose), so it never
+file paths (and, when you record, your screen, the microphone you choose and the PC's sound,
+which the app passes to it over a private local pipe), so it never
 uses the network. To remove it, delete that folder.
 
 

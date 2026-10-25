@@ -16,6 +16,8 @@ Stills & Reels needs Windows 10 or 11. It runs on the .NET Framework 4.8, which 
 
 Now click a picture or a video in any File Explorer window. It appears in Stills & Reels straight away, and it keeps following as you click other files or move through them with the arrow keys. The status bar shows how many File Explorer windows it is watching.
 
+It follows more than File Explorer. Click a picture on a web page or in another app and Pictures mode picks it up from the screen, exactly as shown there (the app never downloads anything; for the full-size original, right-click the picture in your browser and choose **Copy image**, since copied pictures are picked up at full quality). Files you click on the desktop or in any app's Open/Save dialog, and files you copy with Ctrl+C, are followed too: pictures in Pictures mode, videos in Videos mode and the video editor. Each of these can be switched off in **Settings > Following**. Nothing is picked up from web pages or the clipboard while you are in Edit picture, or while the Video snip window is open.
+
 If you're upgrading from Picture Preview, your settings carry over automatically on first run, and the old app's engine and cache folders are cleaned up. You can delete the old exe once you're happy with the new one.
 
 ## The four modes
@@ -99,13 +101,15 @@ Press **Edit** next to Videos and the video you're watching goes straight onto t
 Open **Video snip** with the Snip button next to video Edit, or **Ctrl+Alt+R**.
 
 1. Choose **Area** (a part of the screen you drag out) or **Full screen** (a whole monitor).
-2. Pick the frames per second, whether to show the mouse pointer, and a microphone if you want your voice recorded.
+2. Pick the frames per second, whether to show the mouse pointer, and a microphone if you want your voice recorded. **PC sound** (whatever plays on your default speakers or headphones: videos, music, games, calls) is recorded by default; the PC sound button turns it off. It can be recorded on its own or mixed with the microphone. Your choices are remembered.
 3. Press **Record** (Ctrl+R). For Area, drag over what you want to record. The main Stills & Reels window stays visible so you can record it.
 4. After a short countdown, recording starts. A small bar on screen lets you **Pause**, **Resume** and **Stop**. The bar and the area outline are kept out of the recording.
 
-When you stop, the recording opens in the Video snip window. You can **Save as…** an MP4 file, **Add to video editor**, or **Discard** it.
+When you stop, "Finishing the recording…" shows for a moment while the recording is encoded, then it opens in the Video snip window. You can **Save as…** an MP4 file, **Add to video editor**, or **Discard** it.
 
-Sound from your computer itself (for example a video playing in a browser) isn't recorded, only the microphone you pick.
+**How recordings are made.** Frames come straight from the graphics card (Windows Desktop Duplication), so playing video doesn't tear, and they are stored losslessly while you record, then encoded once in high quality when you stop. Small text and thin lines stay crisp, and pausing costs no quality. The lossless parts can be large while you record (a full-screen video can take about 1 GB a minute); they're kept in the cache and deleted when the recording is finished, and recording stops by itself, keeping what it has, if the disk gets nearly full. Over Remote Desktop, or for an area that spans two screens, the older capture method is used.
+
+Sound and picture are kept in step: the app times how long after the first frame the sound began and shifts the sound to match, so it runs right up to the last frame. Each recording also writes a short technical log to `%LOCALAPPDATA%\StillsAndReels\recording-log.txt` (what FFmpeg reported and the sound timing). It contains no picture or sound, and you can delete it at any time.
 
 ## Video editor
 
@@ -137,8 +141,10 @@ Open it with **Edit** next to Videos, **Alt+3** or **Ctrl+Shift+E**.
 
 Press **Export** at the top right, or **Ctrl+M**:
 
-- **MP4** (H.264 video with AAC sound), from 480p up to 4K, at 24 to 60 frames per second
+- **MP4** (H.264 video with AAC sound), at the project's exact size and frame rate (chosen by default) or from 480p up to 4K at 24 to 60 frames per second, with four quality levels: Smaller file, Standard, High (the default) and Best. Colours are written as standard HD (BT.709) and labelled, so players show what you edited
 - **MP3**, the sound only
+
+The first video you put on a new project sets the canvas size and frame rate to match it, so a 4K or 60 fps clip, or a screen recording, keeps its size. Videos are decoded with sharp scaling, and a clip that fills the canvas is copied pixel for pixel.
 
 ## Settings
 
@@ -219,5 +225,7 @@ The first time you use a video feature, Stills & Reels unpacks its built-in vide
 - **"Windows protected your PC"** when starting the app: click **More info**, then **Run anyway**. The app isn't code-signed, so Windows asks once.
 - **Nothing appears when I click a file in File Explorer:** check **Follow the selection in File Explorer** is on in Settings, and look at the status bar to see how many File Explorer windows are being watched.
 - **The first video takes a few seconds to open:** that's the video engine unpacking. It only happens once.
-- **My recording has no computer sound:** Stills & Reels records the microphone you choose, not the sound your PC is playing.
+- **My recording has no computer sound:** check the **PC sound** button in the Video snip bar is on. PC sound records whatever plays on the default speakers or headphones at the time you press Record.
+- **A recording's sound and picture don't match:** the app corrects start-up timing automatically. If a recording still looks off, `%LOCALAPPDATA%\StillsAndReels\recording-log.txt` shows what happened in that recording.
+- **A picture clicked on a web page looks small:** pictures from web pages are taken from the screen as shown. Right-click the picture and choose **Copy image** to pick it up at full size.
 - **A file won't open:** some formats, such as HEIC photos, aren't supported. The app tells you when a file can't be shown.

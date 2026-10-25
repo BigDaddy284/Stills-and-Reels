@@ -587,12 +587,12 @@ namespace StillsAndReels
     internal static class FrameGrabber
     {
         /// <summary>Decodes one frame at source time t, scaled to size (after the given extra filters). Returns null at end of file.</summary>
-        public static Bitmap Grab(string path, double t, Size size, string preFilters, Action<Process> started = null)
+        public static Bitmap Grab(string path, double t, Size size, string preFilters, Action<Process> started = null, MediaInfo info = null)
         {
             string args = FFmpeg.InputArgs(path, Math.Max(0, t)) +
                 string.Format(CultureInfo.InvariantCulture,
-                    "-map 0:v:0 -an -sn -dn -frames:v 1 -vf \"{0}scale={1}:{2}:flags=bicubic,format=bgra\" -f rawvideo -pix_fmt bgra pipe:1",
-                    string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", size.Width, size.Height);
+                    "-map 0:v:0 -an -sn -dn -frames:v 1 -vf \"{0}{1}\" -f rawvideo -pix_fmt bgra pipe:1",
+                    string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", VideoQuality.ToBgra(size.Width, size.Height, true, info));
             Process p = FFmpeg.Start(args);
             try
             {
@@ -616,8 +616,8 @@ namespace StillsAndReels
         public static Bitmap GrabFull(MediaItem m, double t)
         {
             var sz = m.PixelSize;
-            var b = Grab(m.SourcePath, t, new Size(Math.Max(2, sz.Width), Math.Max(2, sz.Height)), "");
-            if (b == null && t > 0.2) b = Grab(m.SourcePath, Math.Max(0, t - 0.25), new Size(Math.Max(2, sz.Width), Math.Max(2, sz.Height)), "");
+            var b = Grab(m.SourcePath, t, new Size(Math.Max(2, sz.Width), Math.Max(2, sz.Height)), "", null, m.Info);
+            if (b == null && t > 0.2) b = Grab(m.SourcePath, Math.Max(0, t - 0.25), new Size(Math.Max(2, sz.Width), Math.Max(2, sz.Height)), "", null, m.Info);
             return b;
         }
     }

@@ -75,24 +75,27 @@ namespace StillsAndReels
 
             y = Section("Resolution", y, pad, w);
             resolution = new Segmented();
+            // "canvas" keeps the project's exact size, so nothing is scaled (e.g. a 1366 × 768 screen recording)
+            resolution.Add("canvas", (p.Width & ~1) + " × " + (p.Height & ~1));
             resolution.Add("480", "480p").Add("720", "720p").Add("1080", "1080p").Add("1440", "1440p").Add("2160", "4K");
-            int shortSide = Math.Min(p.Width, p.Height);
-            resolution.Selected = shortSide >= 2160 ? "2160" : shortSide >= 1440 ? "1440" : shortSide >= 1080 ? "1080" : shortSide >= 720 ? "720" : "480";
+            resolution.Selected = "canvas";
             resolution.Picked += v => Sync();
             y = Put(resolution, y, pad, w, Theme.S(34));
 
             y = Section("Frame rate", y, pad, w);
             fps = new Segmented();
             foreach (var f in new[] { "24", "25", "30", "50", "60" }) fps.Add(f, f + " fps");
-            fps.Selected = Math.Round(p.Fps).ToString(CultureInfo.InvariantCulture);
-            if (fps.Selected != "24" && fps.Selected != "25" && fps.Selected != "50" && fps.Selected != "60") fps.Selected = "30";
+            // the project's own rate is offered too (29.97, 15, 23.976 …) so frames are not dropped or repeated
+            string own = Math.Round(p.Fps, 3).ToString("0.###", CultureInfo.InvariantCulture);
+            if (own != "24" && own != "25" && own != "30" && own != "50" && own != "60") fps.Add(own, own + " fps");
+            fps.Selected = own;
             fps.Picked += v => Sync();
             y = Put(fps, y, pad, w, Theme.S(34));
 
             y = Section("Quality", y, pad, w);
             quality = new Segmented();
-            quality.Add("28", "Smaller file").Add("23", "Recommended").Add("20", "High").Add("17", "Best");
-            quality.Selected = "20";
+            quality.Add("28", "Smaller file").Add("23", "Standard").Add("18", "High").Add("14", "Best");
+            quality.Selected = "18";
             quality.Picked += v => Sync();
             y = Put(quality, y, pad, w, Theme.S(34));
 
@@ -186,6 +189,7 @@ namespace StillsAndReels
 
         Size OutSize()
         {
+            if (resolution.Selected == "canvas") return new Size(project.Width & ~1, project.Height & ~1);
             int shortSide = int.Parse(resolution.Selected, CultureInfo.InvariantCulture);
             double r = (double)project.Width / project.Height;
             int w, h;
@@ -203,7 +207,7 @@ namespace StillsAndReels
             var s = OutSize();
             int crf = int.Parse(quality.Selected, CultureInfo.InvariantCulture);
             // rough size estimate: bits per pixel per frame by quality
-            double bpp = crf <= 17 ? 0.16 : crf <= 20 ? 0.10 : crf <= 23 ? 0.065 : 0.035;
+            double bpp = crf <= 14 ? 0.22 : crf <= 18 ? 0.13 : crf <= 23 ? 0.065 : 0.035;
             double fr = double.Parse(fps.Selected, CultureInfo.InvariantCulture);
             double mb = (s.Width * (double)s.Height * fr * bpp + 192000) * project.Duration / 8 / 1048576;
             info.Text = s.Width + " × " + s.Height + ", " + fps.Selected + " fps, H.264 with AAC sound. Estimated size about " +
