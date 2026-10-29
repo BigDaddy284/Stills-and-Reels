@@ -1,4 +1,4 @@
-Stills & Reels 2.2 - source
+Stills & Reels 2.3 - source
 ===========================
 C# WinForms, .NET Framework 4.8. About 17,000 lines in src/. Built on Linux with Mono (mcs) and
 mingw windres; the result is a single Windows exe.
@@ -16,7 +16,10 @@ Layout
   src/PickupWatcher.cs   follows clicks in other apps (pictures on web pages, files in Open/Save dialogs)
                          and the clipboard
   src/MainForm.cs        main window, menus, modes (Pictures / Edit / Videos / Edit video), snips
-  src/Snip.cs            picture snip       src/VideoSnip.cs   screen recording
+  src/Snip.cs            picture snip (with its delay timer)       src/VideoSnip.cs   screen recording
+  src/JumpList.cs        taskbar jump list (Pic Snip / Vid Snip run the exe with --picsnip / --vidsnip),
+                         written with the shell's ICustomDestinationList (declared in the file, no extra library);
+                         a shortcut started while the app is open is passed to it through a named event
   (VideoSnip.cs captures with ddagrab + hwdownload when a trial run succeeds, else gdigrab)
   src/PcSound.cs         PC sound for recordings (WASAPI loopback, streamed to FFmpeg over a named pipe;
                          the bundled FFmpeg has no loopback input of its own)
@@ -31,6 +34,10 @@ Layout
                          CloseTest.cs (opens the snip windows and closes the app),
                          HideTest.cs (New snip hides only the Snip window, not the main window;
                          run with 'picture' or 'video'),
+                         SnipWindowsTest.cs (separate snip windows, Pic Snip / Vid Snip start-up, the snip
+                         timer, shortcut arguments; run with 'windows', 'start pic', 'start vid', 'keep',
+                         'timer' or 'args'. Needs a window manager on the Xvfb display for minimise and
+                         maximise: DISPLAY=:99 openbox &),
                          pickup.cs (pick-up helpers: hidden extensions, picked-picture files),
                          ExportTest.cs (exports one video through the editor's ExportJob; compare
                          the result with the source using FFmpeg's psnr filter),

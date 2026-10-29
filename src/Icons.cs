@@ -11,7 +11,7 @@ namespace StillsAndReels
         Volume, VolumeLow, Mute, Fullscreen, ExitFullscreen, Minus, Plus, Grid, Lasso, RectSelect, Screen,
         Settings, Hand, Speed, Folder, Sun, Moon, Music, Refresh,
         Scissors, Snowflake, Text, Magnet, Link, FitWidth, Import, Export, Diamond, Transition, Filter, Sparkle,
-        Record, Stop, Mic, Eye, EyeOff, Lock, Unlock, Layers, Paste, Cursor, Audio, Captions, Duplicate, Wave, Detach, ChevronLeft, ChevronRight
+        Record, Stop, Mic, Eye, EyeOff, Lock, Unlock, Layers, Paste, Cursor, Audio, Captions, Duplicate, Wave, Detach, ChevronLeft, ChevronRight, Timer
     }
 
     /// <summary>Line icons drawn in code on a 24×24 grid (no image files needed).</summary>
@@ -473,6 +473,14 @@ namespace StillsAndReels
                 case Ico.Refresh:
                     g.DrawArc(p, 4.5f, 4.5f, 15, 15, 30, 300);
                     Arrow(g, p, new PointF(18.8f, 8.2f), 0.9f, -2.2f);
+                    break;
+                case Ico.Timer:   // stopwatch
+                    g.DrawEllipse(p, 4.5f, 6, 15, 15);
+                    g.DrawLine(p, 10, 2.5f, 14, 2.5f);
+                    g.DrawLine(p, 12, 2.5f, 12, 6);
+                    g.DrawLine(p, 12, 13.5f, 12, 9.5f);
+                    g.DrawLine(p, 12, 13.5f, 14.8f, 15.5f);
+                    g.DrawLine(p, 18.2f, 6.8f, 19.6f, 5.4f);
                     break;
             }
         }

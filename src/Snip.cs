@@ -252,6 +252,13 @@ namespace StillsAndReels
         readonly Func<Bitmap> getPicture;
         readonly Action<Bitmap> sendToEditor;
         readonly Form host;
+        readonly Settings settings;
+        int delay;                // seconds to wait before a screen snip, like Snip & Sketch's timer
+        static readonly int[] Delays = { 0, 3, 5, 10 };
+        readonly System.Windows.Forms.Timer delayTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        int delayLeft;
+        double delayOpacity;
+        DelayBadge badge;
         readonly ImageCanvas canvas = new ImageCanvas();
         readonly ThemedPanel bar = new ThemedPanel { Surface = Surface.Bar, BorderBottom = true };
         readonly FlowLayoutPanel flow = new FlowLayoutPanel();
@@ -262,17 +269,19 @@ namespace StillsAndReels
         readonly Dictionary<EditTool, Color> colors = new Dictionary<EditTool, Color>();
         readonly Dictionary<EditTool, int> sizes = new Dictionary<EditTool, int>();
 
-        ThemedButton bNew, bRect, bFree, bScreen, bPicture, bPen, bHigh, bErase, bColor, bUndo, bRedo, bClear, bCopy, bSave, bSend;
+        ThemedButton bNew, bRect, bFree, bScreen, bPicture, bDelay, bPen, bHigh, bErase, bColor, bUndo, bRedo, bClear, bCopy, bSave, bSend;
         ThemedSlider sizeSlider;
 
-        public SnipForm(Form host, Func<Bitmap> getPicture, Action<Bitmap> sendToEditor)
+        public SnipForm(Form host, Settings settings, Func<Bitmap> getPicture, Action<Bitmap> sendToEditor)
         {
             this.host = host;
+            this.settings = settings;
             this.getPicture = getPicture;
             this.sendToEditor = sendToEditor;
+            if (settings != null) delay = Array.IndexOf(Delays, settings.GetInt("Snip.Delay", 0)) >= 0 ? settings.GetInt("Snip.Delay", 0) : 0;
             Text = "Snip";
-            ShowInTaskbar = false;
-            MinimizeBox = false;
+            // its own window in the taskbar: minimise and maximise it without touching the main window
+            ShowInTaskbar = true;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
             Font = Theme.UiFont(9.5f);
@@ -298,6 +307,7 @@ namespace StillsAndReels
             Sep();
             bScreen = Btn(Ico.Screen, "Screen", "Snip from your screen", (s, e) => { fromScreen = true; Sync(); }, 92);
             bPicture = Btn(Ico.Picture, "Picture", "Snip from the picture open in Stills & Reels", (s, e) => { fromScreen = false; Sync(); }, 96);
+            bDelay = Btn(Ico.Timer, "No delay", "Wait before snipping the screen, so you can open a menu or tooltip first", (s, e) => ShowDelays(), 104);
             Sep();
             bPen = Btn(Ico.Pen, null, "Pen", (s, e) => SelectTool(EditTool.Pen), 40);
             bHigh = Btn(Ico.Highlighter, null, "Highlighter", (s, e) => SelectTool(EditTool.Highlighter), 40);
@@ -324,13 +334,9 @@ namespace StillsAndReels
             Controls.Add(canvas);
             Controls.Add(bar);
 
-            var wa = Screen.FromControl(host).WorkingArea;
-            int w = Theme.S(760), h = Theme.S(560);
-            int x = host.Right + Theme.S(8);
-            if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w - Theme.S(16));
-            int y = Math.Max(wa.Top, Math.Min(host.Top + Theme.S(60), wa.Bottom - h));
-            Bounds = new Rectangle(x, y, w, h);
+            Bounds = SnipWindows.PlaceBeside(host, Theme.S(760), Theme.S(560));
 
+            delayTimer.Tick += (s, e) => DelayTick();
             Theme.Changed += OnTheme;
             Sync();
         }
@@ -352,6 +358,8 @@ namespace StillsAndReels
             if (disposing)
             {
                 Theme.Changed -= OnTheme;
+                CancelDelay();
+                delayTimer.Dispose();
                 canvas.Edit = null;
                 if (session != null) { session.Dispose(); session = null; }
             }
@@ -411,6 +419,9 @@ namespace StillsAndReels
             bFree.Checked = shape == SnipShape.Freeform;
             bScreen.Checked = fromScreen;
             bPicture.Checked = !fromScreen;
+            bDelay.Enabled = fromScreen;
+            bDelay.Text = delay == 0 ? "No delay" : delay + " s delay";
+            bDelay.Checked = fromScreen && delay > 0;
             bool has = session != null;
             bPen.Enabled = bHigh.Enabled = bErase.Enabled = bColor.Enabled = sizeSlider.Enabled = has;
             bPen.Checked = has && tool == EditTool.Pen;
@@ -469,8 +480,73 @@ namespace StillsAndReels
             Ui.ShowMenuBelow(menu, bColor);
         }
 
+        void ShowDelays()
+        {
+            var menu = new ContextMenuStrip();
+            foreach (int d in Delays)
+            {
+                int sec = d;
+                var mi = new ToolStripMenuItem(d == 0 ? "No delay" : d + " seconds") { Checked = d == delay };
+                mi.Click += (s, e) =>
+                {
+                    delay = sec;
+                    if (settings != null) { settings.Set("Snip.Delay", delay); try { settings.Save(); } catch { } }
+                    Sync();
+                };
+                menu.Items.Add(mi);
+            }
+            menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
+            Ui.ShowMenuBelow(menu, bDelay);
+        }
+
+        public bool Waiting { get { return delayTimer.Enabled; } }
+
+        /// <summary>Hides the Snip window and counts down; the screen is captured when it reaches zero.</summary>
+        void StartDelay()
+        {
+            delayOpacity = Opacity;
+            Opacity = 0;    // like a screen snip: only the Snip window gets out of the way
+            delayLeft = delay;
+            badge = new DelayBadge();
+            badge.Clicked += (s, e) => CancelDelay();
+            badge.ShowCount(delayLeft);
+            delayTimer.Start();
+        }
+
+        void DelayTick()
+        {
+            delayLeft--;
+            if (delayLeft > 0) { if (badge != null) badge.ShowCount(delayLeft); return; }
+            delayTimer.Stop();
+            CloseBadge();
+            var result = CaptureScreen(delayOpacity);
+            if (result != null) TakeSnip(result);
+        }
+
+        void CancelDelay()
+        {
+            if (!delayTimer.Enabled) return;
+            delayTimer.Stop();
+            CloseBadge();
+            if (!IsDisposed) { Opacity = delayOpacity; Activate(); }
+        }
+
+        void CloseBadge()
+        {
+            if (badge == null) return;
+            badge.Close();
+            badge.Dispose();
+            badge = null;
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (Waiting)
+            {
+                // while the timer runs the window is invisible: Esc cancels, other keys are left alone
+                if (keyData == Keys.Escape) { CancelDelay(); return true; }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
             switch (keyData)
             {
                 case Keys.Control | Keys.N: NewSnip(); return true;
@@ -495,9 +571,11 @@ namespace StillsAndReels
 
         public void NewSnip()
         {
+            if (Waiting) return;
             if (!ConfirmDiscard()) return;
+            if (fromScreen && delay > 0) { StartDelay(); return; }
             Bitmap result = null;
-            if (fromScreen) result = CaptureScreen();
+            if (fromScreen) result = CaptureScreen(Opacity);
             else
             {
                 var pic = getPicture != null ? getPicture() : null;
@@ -514,6 +592,11 @@ namespace StillsAndReels
                 }
             }
             if (result == null) return;
+            TakeSnip(result);
+        }
+
+        void TakeSnip(Bitmap result)
+        {
             SetSnip(result);
             // like the Windows Snipping Tool: a new snip is on the clipboard straight away
             if (CopySnip(true)) Text = "Snip – " + session.Size.Width + " × " + session.Size.Height + " – copied to the clipboard";
@@ -525,10 +608,10 @@ namespace StillsAndReels
             sendToEditor(session.Flatten());
         }
 
-        Bitmap CaptureScreen()
+        /// <param name="myOpacity">the opacity to give the Snip window back afterwards</param>
+        Bitmap CaptureScreen(double myOpacity)
         {
             var vs = SystemInformation.VirtualScreen;
-            double myOpacity = Opacity;
             Bitmap shot = null;
             try
             {
@@ -629,8 +712,100 @@ namespace StillsAndReels
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            CancelDelay();
             if (e.CloseReason == CloseReason.UserClosing && !ConfirmDiscard()) { e.Cancel = true; return; }
             base.OnFormClosing(e);
+        }
+    }
+
+    internal static class SnipWindows
+    {
+        /// <summary>
+        /// Where a snip window opens: beside the main window, or in the middle of the screen when the main window
+        /// is minimised (started from the taskbar's Pic Snip / Vid Snip).
+        /// </summary>
+        public static Rectangle PlaceBeside(Form host, int w, int h)
+        {
+            Rectangle hb = host == null || host.WindowState == FormWindowState.Minimized ? Rectangle.Empty : host.Bounds;
+            if (hb.Width <= 0)
+            {
+                var sa = Screen.FromPoint(Cursor.Position).WorkingArea;
+                w = Math.Min(w, sa.Width); h = Math.Min(h, sa.Height);
+                return new Rectangle(sa.Left + (sa.Width - w) / 2, sa.Top + (sa.Height - h) / 2, w, h);
+            }
+            var wa = Screen.FromRectangle(hb).WorkingArea;
+            int x = hb.Right + Theme.S(8);
+            if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w - Theme.S(16));
+            int y = Math.Max(wa.Top, Math.Min(hb.Top + Theme.S(60), wa.Bottom - h));
+            return new Rectangle(x, y, w, h);
+        }
+    }
+
+    /// <summary>
+    /// "Snip in 3" in the corner of the screen while the snip timer runs. It never takes the focus (so an open menu
+    /// in another app stays open), is kept out of screen captures, and cancels the timer when clicked.
+    /// </summary>
+    internal sealed class DelayBadge : Form
+    {
+        int seconds;
+        public event EventHandler Clicked;
+
+        public DelayBadge()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            TopMost = true;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+            BackColor = Color.FromArgb(14, 19, 37);
+            Cursor = Cursors.Hand;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+            Size = new Size(Theme.S(290), Theme.S(48));
+            var wa = Screen.FromPoint(Cursor.Position).WorkingArea;
+            Location = new Point(wa.Right - Width - Theme.S(16), wa.Bottom - Height - Theme.S(16));
+            using (var path = Theme.Rounded(new RectangleF(0, 0, Width, Height), Theme.F(12))) Region = new Region(path);
+        }
+
+        public void ShowCount(int secondsLeft)
+        {
+            seconds = secondsLeft;
+            if (!Visible) Show(); else Invalidate();
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                cp.ExStyle |= 0x80 | 0x08000000; // tool window, no activate
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); CaptureExclusion.Apply(this); }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            var h = Clicked;
+            if (h != null) h(this, EventArgs.Empty);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(BackColor);
+            using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.F(12)))
+            using (var b = new LinearGradientBrush(ClientRectangle, Color.FromArgb(38, 104, 255), Color.FromArgb(176, 72, 255), 0f))
+            using (var pen = new Pen(b, Theme.F(1.5f))) g.DrawPath(pen, path);
+            float m = Theme.F(12), sz = Height - 2 * m;
+            Icons.Draw(g, Ico.Timer, new RectangleF(Theme.F(14), m, sz, sz), Color.White);
+            var text = new Rectangle((int)(Theme.F(14) + sz + Theme.F(10)), 0, Width - (int)(Theme.F(14) + sz + Theme.F(10)) - Theme.S(8), Height);
+            TextRenderer.DrawText(g, "Snip in " + seconds + "  ·  click to cancel", Theme.UiFont(10f, FontStyle.Bold), text, Color.White,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
     }
 

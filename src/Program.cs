@@ -14,13 +14,20 @@ namespace StillsAndReels
             Application.ThreadException += (s, e) => ShowError(e.Exception);
             AppDomain.CurrentDomain.UnhandledException += (s, e) => ShowError(e.ExceptionObject as Exception);
 
+            // --picsnip / --vidsnip come from the taskbar jump list; if the app is already open it shows the snip window
+            string snip = args.Length > 0 ? Shortcuts.SnipRequest(args[0]) : null;
+            if (snip != null && Shortcuts.PassToRunningCopy(snip)) return;
+
             ImageCache.Initialize();
             try
             {
-                Application.Run(new MainForm(args.Length > 0 ? args[0] : null));
+                var main = new MainForm(snip == null && args.Length > 0 ? args[0] : null, snip);
+                Shortcuts.Listen(request => main.OpenSnipFromShortcut(request));
+                Application.Run(main);
             }
             finally
             {
+                Shortcuts.StopListening();
                 ImageCache.Shutdown();
             }
         }

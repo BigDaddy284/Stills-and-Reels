@@ -1,4 +1,4 @@
-Stills & Reels 2.2
+Stills & Reels 2.3
 ==================
 (formerly Picture Preview)
 
@@ -7,7 +7,24 @@ Stills & Reels 2.2
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
 
-Following clicks anywhere (new)
+Snip windows and taskbar shortcuts (new in 2.3)
+- The Snip and Video snip windows are now windows of their own, each with its own taskbar
+  entry and its own minimise and maximise buttons. Minimising the main window no longer hides
+  them, and minimising a Snip window leaves the main window alone.
+- Pin StillsAndReels.exe to the taskbar (start it, right-click its taskbar icon, "Pin to taskbar"),
+  then right-click the icon: "Pic Snip" and "Vid Snip" open straight into that snip tool.
+  If the app is already open, the snip window opens there. Started on its own, the main window
+  waits minimised in the taskbar, and closing the snip window closes the app (unless you
+  opened the main window meanwhile, or used Paste into editor / Add to video editor).
+  The shortcuts are refreshed every time the app starts, so moving the exe is fine.
+- Snip timer, like Snip & Sketch: the delay button in the Snip bar offers No delay, 3, 5 or
+  10 seconds. With a delay, New snip hides the Snip window and counts down in the corner of
+  the screen ("Snip in 3 · click to cancel"), giving you time to open a menu or tooltip
+  before the screen is frozen for snipping. Esc or clicking the countdown cancels it. The
+  countdown never takes the focus, so an open menu stays open, and it isn't in the snip.
+  The delay is remembered, and applies to Screen snips (not to snips from the open picture).
+
+Following clicks anywhere (2.2)
 - Pictures mode (and Edit picture, when there are no unsaved edits) also picks up a picture
   you click on a web page or in another app, including photo sites and the OneDrive website
   or app that hide their pictures from accessibility tools. It is copied from the screen
@@ -26,7 +43,7 @@ Following clicks anywhere (new)
 - Clicks are only watched, never blocked or changed. The app doesn't record which
   keys you press or anything about the pages you visit.
 
-Sharper video (new)
+Sharper video (2.2)
 - Video snip records the PC's own sound (videos, music, games, calls) by default; the PC sound
   button in the Video snip bar turns it off. It works on its own or mixed with a microphone, and
   records whatever plays on your default speakers or headphones. Your Video snip choices (PC
