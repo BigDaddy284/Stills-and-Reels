@@ -1,6 +1,13 @@
 # Changelog
 
-## 2.2 (current)
+## 2.3 (current)
+
+- **Snip windows of their own.** The Snip and Video snip windows each have their own taskbar entry and their own minimise and maximise buttons. Minimising the main window leaves them on screen, and minimising either of them leaves the main window alone.
+- **Pic Snip and Vid Snip in the taskbar.** Pin the app to the taskbar and right-click its icon: **Pic Snip** and **Vid Snip** open straight into that snip tool. If the app is already open, the snip window opens there instead of in a second copy. Started on its own, the main window waits minimised, and closing the snip window closes the app unless the main window was opened meanwhile (Paste into editor and Add to video editor open it). The same shortcuts work from a command line as `StillsAndReels.exe --picsnip` and `--vidsnip`.
+- **Snip timer.** A delay button in the Snip bar offers No delay, 3, 5 or 10 seconds, like Snip & Sketch. New snip then hides the Snip window and counts down in the corner of the screen before the screen is frozen for snipping, so you can open a menu or tooltip first. Esc or clicking the countdown cancels; the countdown never takes the focus and isn't in the snip. The choice is remembered.
+- A snip window opened while the main window is minimised appears in the middle of the screen instead of off screen beside it.
+
+## 2.2
 
 - The app is now called **Stills & Reels** (it used to be Picture Preview).
 - Your settings carry over from Picture Preview automatically on first run.

@@ -1,8 +1,8 @@
 # Stills & Reels user guide
 
-This guide covers everything in Stills & Reels 2.2, from first start to exporting a finished video.
+This guide covers everything in Stills & Reels 2.3, from first start to exporting a finished video.
 
-**Contents:** [Getting started](#getting-started) · [The four modes](#the-four-modes) · [Pictures](#pictures) · [Edit picture](#edit-picture) · [Snip](#snip) · [Videos](#videos) · [Video snip](#video-snip-screen-recording) · [Video editor](#video-editor) · [Settings](#settings) · [Your files and privacy](#your-files-and-privacy) · [Keyboard shortcuts](#keyboard-shortcuts) · [Troubleshooting](#troubleshooting)
+**Contents:** [Getting started](#getting-started) · [The four modes](#the-four-modes) · [Pictures](#pictures) · [Edit picture](#edit-picture) · [Snip](#snip) · [Videos](#videos) · [Video snip](#video-snip-screen-recording) · [Video editor](#video-editor) · [Settings](#settings) · [Your files and privacy](#your-files-and-privacy) · [Keyboard shortcuts](#keyboard-shortcuts) · [Taskbar shortcuts](#taskbar-shortcuts-pic-snip-and-vid-snip) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -68,12 +68,13 @@ With no picture open, Ctrl+V starts a new picture from the clipboard. **Ctrl+Alt
 
 ## Snip
 
-Open **Snip** with the button next to picture Edit, or **Ctrl+Shift+N**. The Snip window opens beside the main window.
+Open **Snip** with the button next to picture Edit, or **Ctrl+Shift+N**. The Snip window opens beside the main window. It's a window of its own, with its own taskbar entry, so you can minimise or maximise it (or the main window) without the other following.
 
 1. Choose a shape: **Rectangle** or **Freeform**.
 2. Choose what to snip from: **Screen** (anything on your monitors) or **Picture** (the picture open in Stills & Reels).
-3. Press **New snip**. Only the Snip window steps aside, so the main Stills & Reels window stays on screen and can be snipped too.
-4. Drag over the area you want. Esc cancels.
+3. To snip something that only shows while you hover or click (a menu, a tooltip), choose a delay with the timer button: **No delay**, **3**, **5** or **10 seconds**. Your choice is remembered.
+4. Press **New snip**. Only the Snip window steps aside, so the main Stills & Reels window stays on screen and can be snipped too. With a delay, a countdown shows in the corner of the screen ("Snip in 3 · click to cancel"); open your menu while it runs. The countdown never takes the focus, so the menu stays open, and it isn't in the snip. Press Esc or click the countdown to cancel.
+5. Drag over the area you want. Esc cancels.
 
 The Snip window comes back with your snip in it, and the snip is already copied to the clipboard. From there you can:
 
@@ -98,7 +99,7 @@ Press **Edit** next to Videos and the video you're watching goes straight onto t
 
 ## Video snip (screen recording)
 
-Open **Video snip** with the Snip button next to video Edit, or **Ctrl+Alt+R**.
+Open **Video snip** with the Snip button next to video Edit, or **Ctrl+Alt+R**. Like Snip, it's a window of its own with its own taskbar entry, minimise and maximise.
 
 1. Choose **Area** (a part of the screen you drag out) or **Full screen** (a whole monitor).
 2. Pick the frames per second, whether to show the mouse pointer, and a microphone if you want your voice recorded. **PC sound** (whatever plays on your default speakers or headphones: videos, music, games, calls) is recorded by default; the PC sound button turns it off. It can be recorded on its own or mixed with the microphone. Your choices are remembered.
@@ -220,10 +221,20 @@ The first time you use a video feature, Stills & Reels unpacks its built-in vide
 | Ctrl+O | Open a file |
 | Ctrl+, | Settings |
 
+## Taskbar shortcuts: Pic Snip and Vid Snip
+
+Pin the app to the taskbar: start it, right-click its taskbar icon and choose **Pin to taskbar**. Right-click the pinned icon and you'll find **Pic Snip** and **Vid Snip** under Tasks. Each opens straight into that snip tool:
+
+- If Stills & Reels is already open, the snip window opens in it.
+- If not, the app starts with the main window minimised in the taskbar and the snip window in the middle of the screen. Closing the snip window then closes the app, unless you opened the main window in the meantime (**Paste into editor** and **Add to video editor** open it for you).
+
+The shortcuts are written each time the app starts, so they keep working if you move the exe (start it once from its new place). They run `StillsAndReels.exe --picsnip` and `--vidsnip`, which you can also use in your own shortcuts.
+
 ## Troubleshooting
 
 - **"Windows protected your PC"** when starting the app: click **More info**, then **Run anyway**. The app isn't code-signed, so Windows asks once.
 - **Nothing appears when I click a file in File Explorer:** check **Follow the selection in File Explorer** is on in Settings, and look at the status bar to see how many File Explorer windows are being watched.
+- **Pic Snip and Vid Snip don't show when I right-click the taskbar icon:** start the app once from the exe you pinned (the shortcuts are written when it starts). If you pinned an older copy, unpin it and pin the one you use now.
 - **The first video takes a few seconds to open:** that's the video engine unpacking. It only happens once.
 - **My recording has no computer sound:** check the **PC sound** button in the Video snip bar is on. PC sound records whatever plays on the default speakers or headphones at the time you press Record.
 - **A recording's sound and picture don't match:** the app corrects start-up timing automatically. If a recording still looks off, `%LOCALAPPDATA%\StillsAndReels\recording-log.txt` shows what happened in that recording.

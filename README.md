@@ -8,7 +8,7 @@
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![.NET Framework 4.8](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)
-![Version 2.2](https://img.shields.io/badge/version-2.2-7C5CFF)
+![Version 2.3](https://img.shields.io/badge/version-2.3-7C5CFF)
 ![Offline](https://img.shields.io/badge/network-none-2EA043)
 [![Licence: GPLv3](https://img.shields.io/badge/licence-GPLv3-blue)](LICENSE)
 
@@ -61,6 +61,9 @@ It used to be called **Picture Preview**. Version 2.2 is the first under the new
 - Every snip goes to your clipboard straight away
 - Draw on it, save it, or **paste it into the editor** in one click
 - The main window stays on screen while you snip, so you can capture the app itself
+- A **delay timer** like Snip & Sketch (3, 5 or 10 seconds) to open a menu or tooltip before snipping
+- Its own window with its own taskbar entry, minimise and maximise
+- **Pic Snip** in the taskbar icon's right-click menu opens it straight away
 
 ### Videos
 - A player that follows whichever video you select in File Explorer, on the desktop or in an Open/Save dialog
@@ -74,6 +77,7 @@ It used to be called **Picture Preview**. Version 2.2 is the first under the new
 - Choose the frame rate, whether the mouse pointer shows, and a microphone; your choices are remembered
 - A small on-screen bar to pause, resume and stop, kept out of the recording itself
 - Save it as MP4 or send it straight to the video editor
+- Its own window with its own taskbar entry; **Vid Snip** in the taskbar icon's right-click menu opens it straight away
 
 ### Video editor
 - A **multitrack timeline** with a media bin, in the style of CapCut
@@ -149,6 +153,7 @@ The tests load the built exe by reflection and run under Mono (with Xvfb for the
 | `tests/logic.cs` | File types, EXIF rotation, the picture cache, editing, crop and rotate, saving in every format, and that originals are untouched |
 | `tests/CloseTest.cs` | The app closes cleanly with each Snip window open |
 | `tests/HideTest.cs` | New snip hides only the Snip window, keeps the main window visible, and brings the Snip window back (run with `picture` or `video`) |
+| `tests/SnipWindowsTest.cs` | The snip windows are separate taskbar windows that minimise and maximise on their own; starting from Pic Snip / Vid Snip; the snip timer; passing a shortcut to an open copy |
 | `tests/pickup.cs` | The click pick-up helpers |
 | `tests/FinishTest.cs` | Lossless recording parts are joined and encoded into an MP4 with progress |
 | `tests/ExportTest.cs` | The editor's export keeps quality (PSNR against the source of at least 38 dB) |
@@ -161,7 +166,8 @@ Recording changes must pass the whole of [tests/TEST PLAN.md](tests/TEST%20PLAN.
 | Path | What's in it |
 |---|---|
 | `src/MainForm.cs` | Main window, menus, the four modes, snips |
-| `src/Snip.cs`, `src/VideoSnip.cs`, `src/PcSound.cs` | Picture snip, screen recording, and PC sound capture (WASAPI loopback streamed to FFmpeg) |
+| `src/Snip.cs`, `src/VideoSnip.cs`, `src/PcSound.cs` | Picture snip (and its timer), screen recording, and PC sound capture (WASAPI loopback streamed to FFmpeg) |
+| `src/JumpList.cs` | The taskbar's Pic Snip and Vid Snip shortcuts (`--picsnip`, `--vidsnip`) |
 | `src/VideoQuality.cs` | The decode, scaling and encode settings that keep video sharp and colours right |
 | `src/PickupWatcher.cs` | Picking up pictures and files clicked anywhere |
 | `src/EditSession.cs`, `src/EditSidebar.cs`, `src/ImageCanvas.cs` | Picture editing, including the paste layer |
@@ -174,6 +180,8 @@ Recording changes must pass the whole of [tests/TEST PLAN.md](tests/TEST%20PLAN.
 | `READ ME.txt` | The read-me that ships with the app, including the full licence and credits text |
 
 ## What's new
+
+**2.3:** the Snip and Video snip windows minimise and maximise on their own, each with its own taskbar entry. Pin the app to the taskbar and right-click it for **Pic Snip** and **Vid Snip**, which open straight into that tool. Snip has a **delay timer** (3, 5 or 10 seconds) like Snip & Sketch.
 
 **2.2:** the app is renamed from Picture Preview to Stills & Reels, settings carry over automatically, old engine and cache folders are tidied up, and projects save as `.srproj`. New snip now leaves the main window on screen so it can be captured.
 

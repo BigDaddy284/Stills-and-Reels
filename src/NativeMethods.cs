@@ -14,6 +14,10 @@ namespace StillsAndReels
         public static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
         public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
         [DllImport("user32.dll")]

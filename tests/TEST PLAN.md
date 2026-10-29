@@ -19,8 +19,12 @@ Automated, run on Linux (Mono, Xvfb, system FFmpeg). How to build and run each o
 | 13 | `AvSyncTest.cs pc+slow` | A slow screen-capture start: an extra input opens 0.8 s late between the screen and the sound pipe, so the sound's clock starts 0.8 s after the picture's (what Boss's PC showed). The recorder must measure the lead (time from FFmpeg's "Input #0" line, printed right after the first frame is grabbed, to the sound pipe connecting) and shift the sound by it | As 8, with the finished MP4 within ±45 ms and the sound lasting to the end |
 | 12 | Start-up order (inside 8 and 9) | The screen input is opened before the sound pipe and analysed for one frame only, so the picture's clock is fixed before any sound is stamped; a 40 ms start offset (SoundPump.StartOffset) centres the result. With the inputs the other way round the test showed the sound 0.2 s ahead | As 8, with the finished MP4 within ±45 ms |
 
+| 14 | `SnipWindowsTest.cs windows`, `start pic`, `start vid`, `keep`, `timer`, `args` (Xvfb with openbox running, for minimise and maximise) | The Snip and Video snip windows are unowned taskbar windows with minimise and maximise, and minimising or maximising one leaves the others alone; Pic Snip / Vid Snip start with the main window minimised and the snip window on screen, and closing the snip window closes the app unless the main window was opened; the snip timer waits the full delay before the selection appears, keeps the main window visible, is remembered, and Esc, clicking the countdown and closing the window cancel it; `--picsnip` / `--vidsnip` are recognised and passed to an open copy | ALL PASSED for each. About 1 run in 8, openbox maps a window that asked to start minimised as a normal one; the test prints a NOTE and checks the app's own state instead |
+
 Tests 8–10 also check that the sound lasts to within 0.1 s of the last frame, in each part and in the finished MP4.
 
 Tests 8–10 are each run 3 times. They all must pass every time.
+
+What Linux can't cover for 2.3: the taskbar jump list itself (Windows shell COM), real taskbar entries and grouping, Opacity hiding the Snip window during the timer (Mono under Xvfb has no compositor), and focus handover from a second copy. Those are in "Windows checks.md".
 
 What Linux can't cover: gdigrab itself, Windows loopback capture of real PC sound (WASAPI) and dshow microphones. Those are in "Windows checks.md".

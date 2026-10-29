@@ -515,8 +515,8 @@ namespace StillsAndReels
                 mic = string.IsNullOrEmpty(m) ? null : m;
             }
             Text = "Video snip";
-            ShowInTaskbar = false;
-            MinimizeBox = false;
+            // its own window in the taskbar: minimise and maximise it without touching the main window
+            ShowInTaskbar = true;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
             Font = Theme.UiFont(9.5f);
@@ -555,12 +555,7 @@ namespace StillsAndReels
             Controls.Add(actions);
             Controls.Add(bar);
 
-            var wa = Screen.FromControl(host).WorkingArea;
-            int w = Theme.S(860), h = Theme.S(520);
-            int x = host.Right + Theme.S(8);
-            if (x + w > wa.Right) x = Math.Max(wa.Left, wa.Right - w - Theme.S(16));
-            int y = Math.Max(wa.Top, Math.Min(host.Top + Theme.S(60), wa.Bottom - h));
-            Bounds = new Rectangle(x, y, w, h);
+            Bounds = SnipWindows.PlaceBeside(host, Theme.S(860), Theme.S(520));
             Theme.Changed += OnTheme;
             diskTimer.Tick += (s, e) => CheckDisk();
             diskTimer.Start();

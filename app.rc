@@ -10,8 +10,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Stills & Reels"
       VALUE "ProductName", "Stills & Reels"
-      VALUE "FileVersion", "2.2.0.0"
-      VALUE "ProductVersion", "2.2.0.0"
+      VALUE "FileVersion", "2.3.0.0"
+      VALUE "ProductVersion", "2.3.0.0"
       VALUE "InternalName", "StillsAndReels"
       VALUE "OriginalFilename", "StillsAndReels.exe"
     END

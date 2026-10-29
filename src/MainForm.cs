@@ -79,9 +79,18 @@ namespace StillsAndReels
         readonly Dictionary<EditTool, Color> toolColors = new Dictionary<EditTool, Color>();
         readonly Dictionary<EditTool, int> toolSizes = new Dictionary<EditTool, int>();
 
-        public MainForm(string fileToOpen)
+        // started from the taskbar's Pic Snip / Vid Snip: the main window waits minimised, and closing the snip
+        // window closes the app unless the main window has been opened meanwhile
+        readonly string startSnip;
+        bool snipOnly;
+        bool restoreMaximized;     // the state to come back to from minimised
+
+        public MainForm(string fileToOpen) : this(fileToOpen, null) { }
+
+        public MainForm(string fileToOpen, string startSnip)
         {
             startupFile = fileToOpen;
+            this.startSnip = startSnip;
             AutoScaleMode = AutoScaleMode.None;
             Font = Theme.UiFont(9.5f);
             Text = AppName;
@@ -140,6 +149,11 @@ namespace StillsAndReels
             statusTimer.Tick += (s, e) => { statusTimer.Stop(); transientStatus = null; UpdateStatus(); };
 
             LoadSettings();
+            if (startSnip != null)
+            {
+                restoreMaximized = WindowState == FormWindowState.Maximized;
+                WindowState = FormWindowState.Minimized;
+            }
             Theme.Changed += (s, e) => ApplyTheme();
 
             watcher.SelectionChanged += (path, kind) => Post(() => OnExplorerSelection(path, kind));
@@ -180,6 +194,57 @@ namespace StillsAndReels
             catch { clipWatch = null; }
             if (!string.IsNullOrEmpty(startupFile) && File.Exists(startupFile)) OpenAny(startupFile);
             UpdateUi();
+            Shortcuts.WriteJumpList();
+            if (startSnip != null)
+            {
+                snipOnly = true;
+                BeginInvoke((Action)(() => OpenSnipFromShortcut(startSnip, true)));
+            }
+        }
+
+        /// <summary>Opens a snip window for a taskbar shortcut (Pic Snip / Vid Snip). Called from any thread.</summary>
+        internal void OpenSnipFromShortcut(string request)
+        {
+            Post(() => OpenSnipFromShortcut(request, false));
+        }
+
+        void OpenSnipFromShortcut(string request, bool atStart)
+        {
+            if (request == "vidsnip") OpenVideoSnip(); else OpenSnip();
+            var f = request == "vidsnip" ? (Form)videoSnip : snip;
+            if (f == null || f.IsDisposed) return;
+            if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
+            f.Activate();
+            if (!atStart) try { NativeMethods.SetForegroundWindow(f.Handle); } catch { }
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (IsHandleCreated && Visible && WindowState != FormWindowState.Minimized)
+            {
+                restoreMaximized = WindowState == FormWindowState.Maximized;
+                snipOnly = false;   // the user opened the main window, so it stays when the snip closes
+            }
+        }
+
+        bool MainMinimised { get { return snipOnly || WindowState == FormWindowState.Minimized; } }
+
+        /// <summary>Brings the main window up, from minimised too (the snip windows are separate windows).</summary>
+        void ShowMain()
+        {
+            snipOnly = false;
+            if (WindowState == FormWindowState.Minimized)
+                WindowState = restoreMaximized ? FormWindowState.Maximized : FormWindowState.Normal;
+            Activate();
+        }
+
+        /// <summary>A snip window closed: if the app was started just for it, close the app too.</summary>
+        void SnipClosed()
+        {
+            if (!snipOnly || IsDisposed) return;
+            if ((snip != null && !snip.IsDisposed) || (videoSnip != null && !videoSnip.IsDisposed)) return;
+            try { BeginInvoke((Action)(() => { if (!IsDisposed) Close(); })); } catch (InvalidOperationException) { }
         }
 
         void ApplyTheme()
@@ -420,7 +485,8 @@ namespace StillsAndReels
             var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             if (fullscreen) b = prevBounds;
             settings.Set("X", b.X); settings.Set("Y", b.Y); settings.Set("Width", b.Width); settings.Set("Height", b.Height);
-            settings.Set("Maximized", fullscreen ? prevState == FormWindowState.Maximized : WindowState == FormWindowState.Maximized);
+            settings.Set("Maximized", fullscreen ? prevState == FormWindowState.Maximized
+                : WindowState == FormWindowState.Maximized || (WindowState == FormWindowState.Minimized && restoreMaximized));
             settings.Set("AlwaysOnTop", TopMost);
             settings.Set("FollowExplorer", follow);
             settings.Set("PickUpClicks", pickClicks);
@@ -648,19 +714,22 @@ namespace StillsAndReels
 
         void OpenVideoSnip()
         {
-            if (mode != AppMode.VideoEdit) EnterVideoEdit();
+            // a minimised main window (Vid Snip from the taskbar) is left as it is; it switches when a recording is added
+            if (mode != AppMode.VideoEdit && !MainMinimised) EnterVideoEdit();
             if (videoSnip == null || videoSnip.IsDisposed)
             {
                 videoSnip = new VideoSnipForm(this, settings, (path, temporary) =>
                 {
+                    ShowMain();
                     if (mode != AppMode.VideoEdit) EnterVideoEdit();
                     var m = editor.Library.Add(path, 0, temporary);
                     editor.OpenFromViewer(path);
                     Flash("Recording added to the video editor");
                     return m != null;
                 });
-                videoSnip.FormClosed += (s, e) => { videoSnip = null; topBar.Modes.VideoSnipOpen = false; UpdateUi(); };
-                videoSnip.Show(this);
+                videoSnip.FormClosed += (s, e) => { videoSnip = null; topBar.Modes.VideoSnipOpen = false; UpdateUi(); SnipClosed(); };
+                // not owned by the main window, so each can be minimised, maximised and found in the taskbar on its own
+                videoSnip.Show();
                 topBar.Modes.VideoSnipOpen = true;
             }
             else
@@ -698,12 +767,14 @@ namespace StillsAndReels
 
         void OpenSnip()
         {
-            if (mode != AppMode.PictureEdit) EnterPictureEdit(null);
+            // a minimised main window (Pic Snip from the taskbar) is left as it is; Paste into editor switches it
+            if (mode != AppMode.PictureEdit && !MainMinimised) EnterPictureEdit(null);
             if (snip == null || snip.IsDisposed)
             {
-                snip = new SnipForm(this, () => CurrentPictureOrNull(), bmp => PasteBitmap(bmp, "Snip"));
-                snip.FormClosed += (s, e) => { topBar.Modes.SnipOpen = false; snip = null; };
-                snip.Show(this);
+                snip = new SnipForm(this, settings, () => CurrentPictureOrNull(), bmp => { ShowMain(); PasteBitmap(bmp, "Snip"); });
+                snip.FormClosed += (s, e) => { topBar.Modes.SnipOpen = false; snip = null; SnipClosed(); };
+                // not owned by the main window, so each can be minimised, maximised and found in the taskbar on its own
+                snip.Show();
             }
             else
             {
@@ -1485,7 +1556,7 @@ namespace StillsAndReels
         void ShowAbout()
         {
             MessageBox.Show(this,
-                AppName + " 2.2\n\n" +
+                AppName + " 2.3\n\n" +
                 "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
                 "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
                 "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +
