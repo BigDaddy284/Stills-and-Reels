@@ -180,8 +180,36 @@ namespace StillsAndReels
                 scrollT = Math.Max(0, t - ClipWidth * 0.08 / pps);
                 ClampScroll();
                 RaiseView();
+                Invalidate();
             }
-            Invalidate();
+            else
+            {
+                // only the strips under the old and new playhead and the time readout need repainting,
+                // so following the playback costs little even on a busy timeline
+                InvalidatePlayheadAt(followX);
+                InvalidatePlayheadAt(x);
+                Invalidate(new Rectangle(0, 0, HeaderW, RulerH));
+            }
+            followX = x;
+        }
+
+        float followX = float.NaN;
+        double lastSnapLine = double.NaN;
+
+        /// <summary>The playhead moved while paused (a drag): repaint only the strips under its old and new place.</summary>
+        public void PlayheadMoved(double from, double to)
+        {
+            InvalidatePlayheadAt(T2X(from));
+            InvalidatePlayheadAt(T2X(to));
+            Invalidate(new Rectangle(0, 0, HeaderW, RulerH));
+            followX = T2X(to);
+        }
+
+        void InvalidatePlayheadAt(float x)
+        {
+            if (float.IsNaN(x)) return;
+            int pad = Theme.S(10);
+            Invalidate(new Rectangle((int)Math.Floor(x) - pad, 0, pad * 2 + 1, Height - ScrollBarH));
         }
 
         public void EnsureVisible(double t)
@@ -377,7 +405,9 @@ namespace StillsAndReels
                             double s = Snap(t, null, false);
                             t = s;
                         }
-                        ed.Scrub(ed.Project.Snap(t));
+                        ed.Scrub(ed.Project.Snap(t), false, true);
+                        if (!double.IsNaN(snapLine) || !double.IsNaN(lastSnapLine)) Invalidate();
+                        lastSnapLine = snapLine;
                         CheckAutoScroll();
                         return;
                     }
@@ -692,6 +722,7 @@ namespace StillsAndReels
                 {
                     var cr = ClipRect(c, r);
                     if (cr.Right < ClipLeft || cr.Left > Width) continue;
+                    if (!e.ClipRectangle.IntersectsWith(Rectangle.Ceiling(RectangleF.Inflate(cr, 2, 2)))) continue; // outside the repainted area
                     bool ghosting = drag == Drag.Move && ReferenceEquals(c, dragClip);
                     DrawClip(g, c, cr, r.Track, ghosting ? 0.35f : 1f);
                 }

@@ -1,6 +1,6 @@
 # Stills & Reels user guide
 
-This guide covers everything in Stills & Reels 2.3, from first start to exporting a finished video.
+This guide covers everything in Stills & Reels 2.4, from first start to exporting a finished video.
 
 **Contents:** [Getting started](#getting-started) · [The four modes](#the-four-modes) · [Pictures](#pictures) · [Edit picture](#edit-picture) · [Snip](#snip) · [Videos](#videos) · [Video snip](#video-snip-screen-recording) · [Video editor](#video-editor) · [Settings](#settings) · [Your files and privacy](#your-files-and-privacy) · [Keyboard shortcuts](#keyboard-shortcuts) · [Taskbar shortcuts](#taskbar-shortcuts-pic-snip-and-vid-snip) · [Troubleshooting](#troubleshooting)
 
@@ -131,6 +131,7 @@ Open it with **Edit** next to Videos, **Alt+3** or **Ctrl+Shift+E**.
 - Add keyframes (Ctrl+K) to animate a clip's position, size, rotation and opacity over time.
 - Change a clip's speed in the Speed tab.
 - Ctrl and the mouse wheel zoom the timeline.
+- Drag the playhead along the ruler to scrub: the preview shows the frame under it as you drag (quickly while dragging, sharp when you let go; zoomed out to minutes it shows the nearest keyframe while you drag), and while the preview plays the playhead moves with it.
 
 **Editing keys:** Space plays, ← / → step one frame (Shift: one second), ↑ / ↓ jump to the previous or next cut, **Ctrl+B** splits, **Del** deletes, **Shift+Del** deletes and closes the gap, **Ctrl+C / X / V** copy, cut and paste, **Ctrl+D** duplicates, and **Ctrl+Z** undoes.
 

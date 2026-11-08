@@ -663,6 +663,7 @@ namespace StillsAndReels
         Placement downPlacement;
         double downDist, downAngle;
         public string Message;   // shown when there is nothing to preview
+        public Action Presented; // UI thread, after each playback frame is handed over
 
         public PreviewSurface(VideoEditorView editor)
         {
@@ -701,6 +702,9 @@ namespace StillsAndReels
                 frame = owned;
             }
             Invalidate();
+            // paint now rather than when the message queue empties: while the playhead is dragged the queue
+            // never empties, and a frame that waits for that arrives after the pointer has moved on
+            if (IsHandleCreated && !IsDisposed) Update();
         }
 
         /// <summary>Called from the playback thread with a frame that is only valid during the call.</summary>
@@ -721,7 +725,19 @@ namespace StillsAndReels
             }
             if (System.Threading.Interlocked.Exchange(ref pendingPaint, 1) == 0 && IsHandleCreated && !IsDisposed)
             {
-                try { BeginInvoke((MethodInvoker)(() => { System.Threading.Interlocked.Exchange(ref pendingPaint, 0); Invalidate(); })); }
+                try
+                {
+                    BeginInvoke((MethodInvoker)(() =>
+                    {
+                        System.Threading.Interlocked.Exchange(ref pendingPaint, 0);
+                        Invalidate();
+                        Update(); // playback frames paint at once, even with the mouse moving over the window
+                        // the playhead and time follow every shown frame. (A timer alone isn't enough: Windows
+                        // only delivers timer ticks when no repaint is waiting, and during playback one nearly always is.)
+                        var h = Presented;
+                        if (h != null) h();
+                    }));
+                }
                 catch { System.Threading.Interlocked.Exchange(ref pendingPaint, 0); }
             }
         }

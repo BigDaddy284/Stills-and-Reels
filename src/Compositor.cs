@@ -408,19 +408,86 @@ namespace StillsAndReels
         }
     }
 
-    /// <summary>Single-frame grabs with a small cache (paused preview and scrubbing).</summary>
+    /// <summary>
+    /// Frame grabs for the paused preview and scrubbing, with a cache. Each grab decodes a short run of frames
+    /// from the wanted one onwards (see FrameGrabber.GrabRun), so dragging the playhead mostly finds the next
+    /// frame already decoded instead of starting FFmpeg again for every pixel the pointer moves.
+    /// </summary>
     internal sealed class StillFrames : IFrameSource
     {
         readonly Dictionary<string, Bitmap> cache = new Dictionary<string, Bitmap>();
         readonly LinkedList<string> lru = new LinkedList<string>();
-        const int MaxEntries = 28;
-        const long MaxBytes = 140L * 1024 * 1024;
+        const int MaxEntries = 400;
+        const long MaxBytes = 320L * 1024 * 1024;
+        const long RunBytes = 36L * 1024 * 1024;   // decoded ahead per grab, at most one second
         long bytes;
         readonly object procLock = new object();
         Process current;
         volatile int cancelGen;
 
         public Func<bool> IsCancelled = () => false;
+        /// <summary>Live scrubbing: fast scaling and frames read ahead; otherwise sharp single frames.</summary>
+        public bool Live;
+        readonly Dictionary<int, double> lastSrc = new Dictionary<int, double>(); // last source time asked for, per media item
+        // keyframes fetched for coarse scrubbing, per media item: time in the file -> cache key, and the stretches
+        // of the file those runs covered (a keyframe serves a time only inside the stretch it was fetched for)
+        sealed class KeyRuns { public readonly SortedList<double, string> Keys = new SortedList<double, string>(); public readonly List<KeyValuePair<double, double>> Covered = new List<KeyValuePair<double, double>>(); }
+        readonly Dictionary<string, KeyRuns> keyRuns = new Dictionary<string, KeyRuns>();
+
+        static string KeyRunId(Clip c, MediaItem m, Size size, string pre) { return m.Id + "|" + size.Width + "x" + size.Height + "|" + pre + "|" + m.SourcePath; }
+
+        /// <summary>The cached keyframe at or before src, if a fetched run covers src; otherwise null.</summary>
+        Bitmap KeyframeFor(Clip c, MediaItem m, double src, Size size, string pre, int gen)
+        {
+            KeyRuns kr;
+            if (!keyRuns.TryGetValue(KeyRunId(c, m, size, pre), out kr)) return null;
+            bool covered = false;
+            foreach (var iv in kr.Covered) if (src >= iv.Key - 1e-6 && src <= iv.Value + 1e-6) { covered = true; break; }
+            if (!covered) return null;
+            // the largest keyframe time <= src
+            var keys = kr.Keys.Keys;
+            int lo = 0, hi = keys.Count - 1, best = -1;
+            while (lo <= hi) { int mid = (lo + hi) / 2; if (keys[mid] <= src + 1e-6) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+            if (best < 0) return null;
+            string k = kr.Keys.Values[best];
+            Bitmap b;
+            if (!cache.TryGetValue(k, out b)) { kr.Keys.RemoveAt(best); return null; } // evicted meanwhile: fetch again
+            Touch(k);
+            return b;
+        }
+
+        /// <summary>Decodes a batch of keyframes from 'from' onwards and caches them.</summary>
+        void FetchKeyframes(Clip c, MediaItem m, double from, Size size, string pre, int gen)
+        {
+            string id = KeyRunId(c, m, size, pre);
+            KeyRuns kr;
+            if (!keyRuns.TryGetValue(id, out kr)) keyRuns[id] = kr = new KeyRuns();
+            var got = new List<KeyValuePair<double, Bitmap>>();
+            try
+            {
+                FrameGrabber.GrabKeyframes(m.SourcePath, from, size, pre, 16, (pt, b) => got.Add(new KeyValuePair<double, Bitmap>(pt, b)),
+                    () => gen != cancelGen, p => { lock (procLock) current = p; }, m.Info);
+            }
+            catch { }
+            lock (procLock) current = null;
+            if (got.Count == 0) return;
+            got.Sort((x, y) => x.Key.CompareTo(y.Key));
+            foreach (var kv in got)
+            {
+                string k = "key|" + id + "|" + Math.Round(kv.Key * 1000);
+                Bitmap have;
+                if (cache.TryGetValue(k, out have)) { kv.Value.Dispose(); Touch(k); }
+                else Put(k, kv.Value);
+                kr.Keys[kv.Key] = k;
+            }
+            double first = got[0].Key, last = got[got.Count - 1].Key;
+            // the run covers from its first keyframe to just before the keyframe that would have followed the last;
+            // a run that ended early (end of file) covers to the end
+            double gap = got.Count > 1 ? (last - first) / (got.Count - 1) : 1.0;
+            double to = got.Count < 16 && m.Duration > 0 ? Math.Max(last, m.Duration) : last + gap * 0.999;
+            kr.Covered.Add(new KeyValuePair<double, double>(Math.Min(from, first), to));
+            if (kr.Covered.Count > 64) kr.Covered.RemoveAt(0);
+        }
 
         public void Cancel()
         {
@@ -428,9 +495,9 @@ namespace StillsAndReels
             lock (procLock) { FFmpeg.KillQuietly(current); current = null; }
         }
 
-        static string Key(Clip c, MediaItem m, double src, Size size)
+        static string Key(Clip c, MediaItem m, double src, Size size, bool sharp)
         {
-            return m.Id + "|" + Math.Round(src * 1000) + "|" + size.Width + "x" + size.Height + "|" + SourceFilters.Pre(c, false) + "|" + m.SourcePath;
+            return m.Id + "|" + Math.Round(src * 1000) + "|" + size.Width + "x" + size.Height + "|" + (sharp ? "s|" : "f|") + SourceFilters.Pre(c, false) + "|" + m.SourcePath;
         }
 
         public Bitmap Get(Clip c, MediaItem m, double t, Size size)
@@ -449,26 +516,80 @@ namespace StillsAndReels
             double src = Math.Max(0, c.SourceTime(t));
             if (dur > 0) src = Math.Min(src, Math.Max(0, dur - fd * 0.5));
             src = Math.Floor(src / fd + 1e-6) * fd; // whole frames
-            string key = Key(c, m, src, size);
+            // how far the pointer moved since the last request (cache hits count too, or a fine drag that leaves
+            // the cached stretch would look like a jump)
+            double prev;
+            bool havePrev = lastSrc.TryGetValue(m.Id, out prev);
+            lastSrc[m.Id] = src;
+            bool sharp = !Live;
+            string key = Key(c, m, src, size, sharp);
             Bitmap cached;
             if (cache.TryGetValue(key, out cached)) { Touch(key); return cached; }
+            // while scrubbing, a sharp frame of the same moment does as well
             int gen = cancelGen;
             Bitmap frame = null;
-            double[] tries = { src, src - fd * 2, src - 0.3, src - 1.0 };
+            string pre = SourceFilters.Pre(c, false);
+            long frameBytes = (long)size.Width * size.Height * 4;
+            int run = (int)Math.Max(1, Math.Min(Math.Round(1 / fd), RunBytes / Math.Max(1, frameBytes)));
+            if (!Live) run = Math.Min(run, 8); // paused: a few frames ahead for stepping with , and .
+            if (Live)
+            {
+                string alt = Key(c, m, src, size, true);
+                if (cache.TryGetValue(alt, out cached)) { Touch(alt); return cached; }
+                // A fast drag, or a zoomed-out timeline, moves further between one mouse event and the next than the
+                // read-ahead covers (a pixel can be a second of video). Decoding ahead frame by frame is wasted then,
+                // and an exact grab decodes every frame from the previous keyframe to src. Instead the keyframe at
+                // or before src is shown, fetched in batches: one FFmpeg run decodes the next 16 keyframes (tens of
+                // seconds of video) and caches them all, so the following mouse events are served from the cache.
+                // Keyframes stand in only while dragging: the exact frame is drawn when the drag ends, and they are
+                // cached under their own keys so they are never mistaken for exact frames.
+                if (havePrev && Math.Abs(src - prev) > run * fd * 0.5)
+                {
+                    Bitmap kf = KeyframeFor(c, m, src, size, pre, gen);
+                    if (kf != null || gen != cancelGen || IsCancelled()) return kf;
+                    bool backwards = src < prev;
+                    FetchKeyframes(c, m, backwards ? Math.Max(0, src - 10) : src, size, pre, gen);
+                    kf = KeyframeFor(c, m, src, size, pre, gen);
+                    if (kf != null || gen != cancelGen || IsCancelled()) return kf;
+                    if (backwards) { FetchKeyframes(c, m, src, size, pre, gen); kf = KeyframeFor(c, m, src, size, pre, gen); }
+                    return kf;
+                }
+            }
+            // dragging backwards: decode the run that ends at src, so the frames before it are the ones kept
+            double runStart = Live && havePrev && src < prev ? Math.Max(0, src - (run - 1) * fd) : src;
+            double[] tries = { runStart, src - fd * 2, src - 0.3, src - 1.0 };
             foreach (var tt in tries)
             {
-                if (tt < 0 && tt != src) continue;
+                if (tt < 0 && tt != runStart) continue;
                 if (gen != cancelGen || IsCancelled()) return null;
                 try
                 {
-                    frame = FrameGrabber.Grab(m.SourcePath, Math.Max(0, tt), size, SourceFilters.Pre(c, false), p => { lock (procLock) current = p; }, m.Info);
+                    var got = new List<KeyValuePair<double, Bitmap>>();
+                    FrameGrabber.GrabRun(m.SourcePath, Math.Max(0, tt), size, pre, run, 1 / fd, sharp,
+                        (st, b) => got.Add(new KeyValuePair<double, Bitmap>(st, b)),
+                        () => gen != cancelGen,
+                        p => { lock (procLock) current = p; }, m.Info);
+                    foreach (var kv in got)
+                    {
+                        double ft = Math.Floor(kv.Key / fd + 0.5) * fd;
+                        string k = Key(c, m, ft, size, sharp);
+                        Bitmap have;
+                        if (cache.TryGetValue(k, out have)) { kv.Value.Dispose(); Touch(k); if (k == key) frame = have; continue; }
+                        Put(k, kv.Value);
+                        if (k == key) frame = kv.Value;
+                    }
+                    if (frame == null && got.Count > 0 && tt < src)
+                    {
+                        // the file ends before src: its last frame stands in
+                        frame = new Bitmap(got[got.Count - 1].Value);
+                        Put(key, frame);
+                    }
                 }
                 catch { frame = null; }
                 lock (procLock) current = null;
                 if (frame != null || gen != cancelGen) break;
             }
-            if (frame == null || gen != cancelGen) { if (frame != null) frame.Dispose(); return null; }
-            Put(key, frame);
+            if (frame == null || gen != cancelGen) return null;
             return frame;
         }
 
@@ -500,6 +621,8 @@ namespace StillsAndReels
             foreach (var b in cache.Values) b.Dispose();
             cache.Clear();
             lru.Clear();
+            keyRuns.Clear();
+            lastSrc.Clear();
             bytes = 0;
         }
     }

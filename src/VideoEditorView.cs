@@ -124,6 +124,7 @@ namespace StillsAndReels
                 catch { bmp.Dispose(); }
             };
             playTimer.Tick += (s, e) => OnPlayTick();
+            preview.Presented = OnPlayTick;
             renderTimer.Tick += (s, e) => { renderTimer.Stop(); RenderNow(); };
             restartTimer.Tick += (s, e) => { restartTimer.Stop(); if (IsPlaying) { double t = playback.Position; StopPlayback(); playhead = t; StartPlayback(); } };
             AllowDrop = true;
@@ -417,21 +418,43 @@ namespace StillsAndReels
 
         // ================================================================== playhead, playback, preview
 
-        public void Scrub(double t, bool keepPlaying = false)
+        /// <summary>
+        /// Moves the playhead. live = the pointer is dragging it: the preview is drawn quickly (fast scaling,
+        /// frames decoded ahead) and only the strips of the timeline that changed are repainted; the sharp
+        /// frame follows from EndScrub.
+        /// </summary>
+        public void Scrub(double t, bool keepPlaying = false, bool live = false)
         {
             bool was = IsPlaying;
             if (was) StopPlayback();
+            double before = playhead;
             playhead = Math.Max(0, Math.Min(Math.Max(project.Duration, 0), t));
-            Timeline.Invalidate();
+            if (live) Timeline.PlayheadMoved(before, playhead); else Timeline.Invalidate();
             bar.Invalidate();
             preview.Invalidate();
             SyncProps();
-            still.CancelStale();
-            RenderNow();
+            if (live) still.CancelIfSlow(400); else still.CancelStale();
+            RenderNow(live);
+            if (live)
+            {
+                // Paint now. Windows only sends WM_PAINT when the message queue is otherwise empty, and a moving
+                // mouse keeps it full (a 1000 Hz mouse sends a move every millisecond), so without this the
+                // timeline, the time readout and the preview all stood still until the mouse paused, however
+                // quickly the frames were decoded. Windows coalesces mouse moves that queue up while painting,
+                // so the next event is always the pointer's latest position.
+                Timeline.Update();
+                bar.Update();
+                preview.Update();
+            }
             if (was && keepPlaying) StartPlayback();
         }
 
-        public void EndScrub() { }
+        /// <summary>The playhead drag ended: draw the frame under it sharply.</summary>
+        public void EndScrub()
+        {
+            Timeline.Invalidate();
+            RenderNow();
+        }
 
         public void SeekTo(double t)
         {
@@ -531,6 +554,9 @@ namespace StillsAndReels
             playhead = playback.Position;
             Timeline.Follow(playhead);
             bar.Invalidate();
+            // see Scrub: a moving mouse over the window would otherwise hold these repaints back
+            Timeline.Update();
+            bar.Update();
         }
 
         public void RequestPreview()
@@ -540,7 +566,7 @@ namespace StillsAndReels
             renderTimer.Start();
         }
 
-        void RenderNow()
+        void RenderNow(bool live = false)
         {
             if (IsPlaying || !IsHandleCreated) return;
             bool empty = project.IsEmpty;
@@ -550,8 +576,9 @@ namespace StillsAndReels
                 preview.SetFrame(null);
                 return;
             }
-            var size = preview.RenderSize(1600);
-            stillGen = still.Request(project.Clone(), MediaSnapshot(), Math.Min(playhead, Math.Max(0, project.Duration - project.FrameDuration * 0.5)), size);
+            // scrubbing draws at up to 960 px wide so each frame is quick; the final frame is sharp at full size
+            var size = preview.RenderSize(live ? 960 : 1600);
+            stillGen = still.Request(project.Clone(), MediaSnapshot(), Math.Min(playhead, Math.Max(0, project.Duration - project.FrameDuration * 0.5)), size, live);
         }
 
         public void TogglePreviewMute() { previewMuted = !previewMuted; bar.Sync(); Say(previewMuted ? "Preview muted" : "Preview sound on"); }
