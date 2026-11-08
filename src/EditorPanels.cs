@@ -702,6 +702,9 @@ namespace StillsAndReels
                 frame = owned;
             }
             Invalidate();
+            // paint now rather than when the message queue empties: while the playhead is dragged the queue
+            // never empties, and a frame that waits for that arrives after the pointer has moved on
+            if (IsHandleCreated && !IsDisposed) Update();
         }
 
         /// <summary>Called from the playback thread with a frame that is only valid during the call.</summary>
@@ -728,6 +731,7 @@ namespace StillsAndReels
                     {
                         System.Threading.Interlocked.Exchange(ref pendingPaint, 0);
                         Invalidate();
+                        Update(); // playback frames paint at once, even with the mouse moving over the window
                         // the playhead and time follow every shown frame. (A timer alone isn't enough: Windows
                         // only delivers timer ticks when no repaint is waiting, and during playback one nearly always is.)
                         var h = Presented;

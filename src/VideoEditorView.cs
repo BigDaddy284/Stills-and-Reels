@@ -435,6 +435,17 @@ namespace StillsAndReels
             SyncProps();
             if (live) still.CancelIfSlow(400); else still.CancelStale();
             RenderNow(live);
+            if (live)
+            {
+                // Paint now. Windows only sends WM_PAINT when the message queue is otherwise empty, and a moving
+                // mouse keeps it full (a 1000 Hz mouse sends a move every millisecond), so without this the
+                // timeline, the time readout and the preview all stood still until the mouse paused, however
+                // quickly the frames were decoded. Windows coalesces mouse moves that queue up while painting,
+                // so the next event is always the pointer's latest position.
+                Timeline.Update();
+                bar.Update();
+                preview.Update();
+            }
             if (was && keepPlaying) StartPlayback();
         }
 
@@ -543,6 +554,9 @@ namespace StillsAndReels
             playhead = playback.Position;
             Timeline.Follow(playhead);
             bar.Invalidate();
+            // see Scrub: a moving mouse over the window would otherwise hold these repaints back
+            Timeline.Update();
+            bar.Update();
         }
 
         public void RequestPreview()

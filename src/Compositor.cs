@@ -516,14 +516,16 @@ namespace StillsAndReels
             double src = Math.Max(0, c.SourceTime(t));
             if (dur > 0) src = Math.Min(src, Math.Max(0, dur - fd * 0.5));
             src = Math.Floor(src / fd + 1e-6) * fd; // whole frames
+            // how far the pointer moved since the last request (cache hits count too, or a fine drag that leaves
+            // the cached stretch would look like a jump)
+            double prev;
+            bool havePrev = lastSrc.TryGetValue(m.Id, out prev);
+            lastSrc[m.Id] = src;
             bool sharp = !Live;
             string key = Key(c, m, src, size, sharp);
             Bitmap cached;
             if (cache.TryGetValue(key, out cached)) { Touch(key); return cached; }
             // while scrubbing, a sharp frame of the same moment does as well
-            double prev;
-            bool havePrev = lastSrc.TryGetValue(m.Id, out prev);
-            lastSrc[m.Id] = src;
             int gen = cancelGen;
             Bitmap frame = null;
             string pre = SourceFilters.Pre(c, false);

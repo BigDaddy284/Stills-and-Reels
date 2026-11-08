@@ -70,6 +70,10 @@ class T {
     Check(got == 45, "every frame of the drag is delivered");
     Check(changed >= 40, "the frames differ (not one frame repeated)");
     Check(total / 45 < tFirst / 2, "a frame mid-drag costs far less than a cold grab (ahead-decoding works)");
+    // a fine drag never falls back to keyframe stand-ins
+    int standIns = 0;
+    foreach (var k in ((System.Collections.IDictionary)Get(frames,"cache")).Keys) if (k.ToString().StartsWith("key|")) standIns++;
+    Check(standIns == 0, "a frame-by-frame drag shows exact frames only (" + standIns + " keyframe stand-ins)");
     // dragging backwards over the same stretch comes from the cache
     sw.Restart();
     for (int i = 45; i >= 1; i--) get.Invoke(frames, new object[]{clip, mi, 0.5 + i / fps, size});
