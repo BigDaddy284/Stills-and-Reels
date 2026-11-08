@@ -1,6 +1,18 @@
 # Changelog
 
-## 2.3 (current)
+## 2.4 (current)
+
+Video editor: playback, scrubbing and speed.
+
+- **The playhead follows playback.** While the preview plays, the timeline marker and the time readout now move with every frame. (They were driven by a timer that Windows never ran while the preview kept repainting, so the marker stood still until you pressed pause.)
+- **Scrubbing shows every frame.** Dragging the playhead now shows the frame under it as you go. Each grab decodes a short run of frames ahead of the pointer and keeps them, so the next frames are already there; the frame under the pointer is drawn quickly while you drag and sharply at full size when you let go. Dragging back over the same stretch is instant. The old code started a fresh FFmpeg for every pixel the pointer moved and killed it as soon as the pointer moved on, so the picture rarely changed until you stopped.
+- **Frame stepping** (, and ., or the arrows under the preview) is quicker: a few frames ahead are decoded with each one.
+- **Lighter timeline.** Following the playhead repaints only the strips of the timeline that changed, and clips outside the repainted area are skipped, so a busy timeline no longer slows playback down.
+- **Sound ready sooner.** Imported videos (and finished recordings) get their sound extracted on its own thread, in parallel with the timeline thumbnails, so "the sound is still being prepared" shows for a shorter time.
+- **Export** composes the next frame while the previous one is being handed to the encoder (two buffers on a writer thread).
+- Reviewed the screen recorder's capture pipeline against the alternatives: the lossless capture it uses (x264 RGB, ultrafast, QP 0) measured fastest of every lossless encoder in the bundled FFmpeg at both 1080p and 4K, so it stays as it is. See the 2.4 release notes for the numbers.
+
+## 2.3
 
 - **Snip windows of their own.** The Snip and Video snip windows each have their own taskbar entry and their own minimise and maximise buttons. Minimising the main window leaves them on screen, and minimising either of them leaves the main window alone.
 - **Pic Snip and Vid Snip in the taskbar.** Pin the app to the taskbar and right-click its icon: **Pic Snip** and **Vid Snip** open straight into that snip tool. If the app is already open, the snip window opens there instead of in a second copy. Started on its own, the main window waits minimised, and closing the snip window closes the app unless the main window was opened meanwhile (Paste into editor and Add to video editor open it). The same shortcuts work from a command line as `StillsAndReels.exe --picsnip` and `--vidsnip`.

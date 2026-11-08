@@ -326,7 +326,8 @@ namespace StillsAndReels
     /// <summary>Renders single preview frames on a worker thread; only the newest request matters.</summary>
     internal sealed class StillRenderer : IDisposable
     {
-        sealed class Req { public Project P; public Dictionary<int, MediaItem> Media; public double T; public Size Size; public int Gen; }
+        sealed class Req { public Project P; public Dictionary<int, MediaItem> Media; public double T; public Size Size; public int Gen; public bool Live; }
+        readonly Stopwatch busy = new Stopwatch();
 
         readonly object gate = new object();
         readonly StillFrames frames = new StillFrames();
@@ -341,12 +342,13 @@ namespace StillsAndReels
             new Thread(Loop) { IsBackground = true, Name = "preview renderer" }.Start();
         }
 
-        public int Request(Project p, Dictionary<int, MediaItem> media, double t, Size size)
+        /// <summary>Asks for a frame; live = scrubbing (fast scaling, frames read ahead). Only the newest request is rendered.</summary>
+        public int Request(Project p, Dictionary<int, MediaItem> media, double t, Size size, bool live = false)
         {
             lock (gate)
             {
                 int gen = ++latest;
-                pending = new Req { P = p, Media = media, T = t, Size = size, Gen = gen };
+                pending = new Req { P = p, Media = media, T = t, Size = size, Gen = gen, Live = live };
                 Monitor.PulseAll(gate);
                 return gen;
             }
@@ -354,6 +356,17 @@ namespace StillsAndReels
 
         /// <summary>Stops an in-flight decode when the request it serves is already out of date.</summary>
         public void CancelStale() { frames.Cancel(); }
+
+        /// <summary>
+        /// Stops the current decode only if it has been running longer than ms. A grab normally takes well
+        /// under that; killing every one as soon as the pointer moved on meant nothing ever finished while
+        /// the playhead was being dragged.
+        /// </summary>
+        public void CancelIfSlow(int ms)
+        {
+            lock (gate) { if (!busy.IsRunning || busy.ElapsedMilliseconds < ms) return; }
+            frames.Cancel();
+        }
 
         void Loop()
         {
@@ -369,10 +382,12 @@ namespace StillsAndReels
                 }
                 int gen = r.Gen;
                 frames.IsCancelled = () => latest != gen;
+                frames.Live = r.Live;
+                lock (gate) busy.Restart();
                 Bitmap bmp = null;
                 try
                 {
-                    var comp = new Compositor(r.P, id => { MediaItem m; return r.Media.TryGetValue(id, out m) ? m : null; }) { HighQuality = true };
+                    var comp = new Compositor(r.P, id => { MediaItem m; return r.Media.TryGetValue(id, out m) ? m : null; }) { HighQuality = !r.Live };
                     bmp = new Bitmap(Math.Max(2, r.Size.Width), Math.Max(2, r.Size.Height), PixelFormat.Format32bppPArgb);
                     using (var g = Graphics.FromImage(bmp)) comp.Render(g, bmp.Width, bmp.Height, r.T, frames);
                     comp.ReleaseWork();
@@ -381,6 +396,7 @@ namespace StillsAndReels
                 {
                     if (bmp != null) { bmp.Dispose(); bmp = null; }
                 }
+                lock (gate) busy.Reset();
                 if (bmp == null) continue;
                 if (latest != gen) { bmp.Dispose(); continue; }
                 var h = Rendered;
@@ -532,8 +548,10 @@ namespace StillsAndReels
 
             long total = Math.Max(1, (long)Math.Ceiling(duration * fps - 1e-6));
             var comp = new Compositor(project, Media) { HighQuality = true };
-            var buf = new byte[w * h * 4];
             var sw = Stopwatch.StartNew();
+            // Frames go to the encoder from a second thread with two buffers, so the next frame is composed while
+            // the previous one is still being written into FFmpeg's pipe (the write blocks whenever x264 is behind).
+            var writer = new PipeWriter(stdin, w * h * 4, () => cancelled);
             try
             {
                 using (var frames = new StreamFrames(fps, true))
@@ -546,9 +564,9 @@ namespace StillsAndReels
                         double t = i / fps;
                         comp.Render(g, w, h, t, frames);
                         g.Flush();
+                        var buf = writer.TakeFree();
                         CopyOut(bmp, buf);
-                        try { stdin.Write(buf, 0, buf.Length); }
-                        catch (IOException) { if (cancelled) throw new OperationCanceledException(); throw new IOException("The encoder stopped unexpectedly."); }
+                        writer.Send(buf);
                         if (i % 5 == 0 || i == total - 1)
                         {
                             double done = (i + 1.0) / total;
@@ -563,12 +581,90 @@ namespace StillsAndReels
                     }
                 }
             }
-            finally { comp.ReleaseWork(); }
+            finally { comp.ReleaseWork(); writer.Finish(); }
             stdin.Close();
             Report(0.99, "Finishing the file…");
             while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
             if (proc.ExitCode != 0) throw new IOException("FFmpeg couldn't write the video.");
             Report(1, "Done");
+        }
+
+        /// <summary>Writes frame buffers to a stream on its own thread; two buffers alternate between composing and writing.</summary>
+        sealed class PipeWriter
+        {
+            readonly Stream output;
+            readonly Func<bool> cancelled;
+            readonly Queue<byte[]> free = new Queue<byte[]>();
+            readonly Queue<byte[]> full = new Queue<byte[]>();
+            readonly object sync = new object();
+            readonly Thread thread;
+            bool done;
+            Exception error;
+
+            public PipeWriter(Stream output, int frameBytes, Func<bool> cancelled)
+            {
+                this.output = output;
+                this.cancelled = cancelled;
+                free.Enqueue(new byte[frameBytes]);
+                free.Enqueue(new byte[frameBytes]);
+                thread = new Thread(Run) { IsBackground = true, Name = "export writer" };
+                thread.Start();
+            }
+
+            public byte[] TakeFree()
+            {
+                lock (sync)
+                {
+                    while (free.Count == 0 && error == null) Monitor.Wait(sync, 200);
+                    if (error != null) throw Wrap(error);
+                    return free.Dequeue();
+                }
+            }
+
+            public void Send(byte[] buf)
+            {
+                lock (sync)
+                {
+                    if (error != null) throw Wrap(error);
+                    full.Enqueue(buf);
+                    Monitor.PulseAll(sync);
+                }
+            }
+
+            Exception Wrap(Exception e)
+            {
+                if (cancelled()) return new OperationCanceledException();
+                return new IOException("The encoder stopped unexpectedly.", e);
+            }
+
+            /// <summary>Waits until every frame handed over has been written; throws if the encoder failed.</summary>
+            public void Finish()
+            {
+                lock (sync) { done = true; Monitor.PulseAll(sync); }
+                thread.Join();
+                if (error != null && !cancelled()) throw Wrap(error);
+                if (cancelled()) throw new OperationCanceledException();
+            }
+
+            void Run()
+            {
+                try
+                {
+                    while (true)
+                    {
+                        byte[] buf;
+                        lock (sync)
+                        {
+                            while (full.Count == 0 && !done) Monitor.Wait(sync);
+                            if (full.Count == 0) return;
+                            buf = full.Dequeue();
+                        }
+                        output.Write(buf, 0, buf.Length);
+                        lock (sync) { free.Enqueue(buf); Monitor.PulseAll(sync); }
+                    }
+                }
+                catch (Exception ex) { lock (sync) { error = ex; Monitor.PulseAll(sync); } }
+            }
         }
 
         static void CopyOut(Bitmap b, byte[] dest)

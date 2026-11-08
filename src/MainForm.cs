@@ -1556,7 +1556,7 @@ namespace StillsAndReels
         void ShowAbout()
         {
             MessageBox.Show(this,
-                AppName + " 2.3\n\n" +
+                AppName + " 2.4\n\n" +
                 "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
                 "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
                 "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +

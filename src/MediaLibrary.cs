@@ -93,7 +93,8 @@ namespace StillsAndReels
         readonly object queueLock = new object();
         readonly Queue<Action> work = new Queue<Action>();
         readonly Queue<Action> copyWork = new Queue<Action>();
-        readonly Thread worker, copier;
+        readonly Queue<Action> soundWork = new Queue<Action>();
+        readonly Thread worker, copier, sounder;
         volatile bool disposed;
         int nextId = 1;
 
@@ -107,8 +108,12 @@ namespace StillsAndReels
             ui = SynchronizationContext.Current ?? new SynchronizationContext();
             worker = new Thread(() => Run(work)) { IsBackground = true, Name = "media analysis", Priority = ThreadPriority.BelowNormal };
             copier = new Thread(() => Run(copyWork)) { IsBackground = true, Name = "media copy", Priority = ThreadPriority.BelowNormal };
+            // sound is extracted on its own thread, so a long video's sound is ready for playback while its
+            // timeline thumbnails are still being made (they used to run one after the other)
+            sounder = new Thread(() => Run(soundWork)) { IsBackground = true, Name = "media sound", Priority = ThreadPriority.BelowNormal };
             worker.Start();
             copier.Start();
+            sounder.Start();
         }
 
         public static string Folder
@@ -320,9 +325,8 @@ namespace StillsAndReels
                 m.Status = MediaStatus.Copying;
                 RaiseItem(m);
                 Enqueue(copyWork, () => Copy(m));
+                if (m.Info.HasAudio) Enqueue(soundWork, () => { MakePcm(m); if (m.Removed) DeleteFiles(m); RaiseItem(m); });
                 if (m.Kind == MediaKind.Video) MakeThumbnails(m);
-                RaiseItem(m);
-                if (m.Info.HasAudio) MakePcm(m);
                 if (m.Removed) DeleteFiles(m);
                 RaiseItem(m);
             }
@@ -608,6 +612,47 @@ namespace StillsAndReels
                     off += n;
                 }
                 return Pixels.FromBgra(buf, size.Width, size.Height);
+            }
+            finally { FFmpeg.KillQuietly(p); }
+        }
+
+        /// <summary>
+        /// Decodes up to count frames in a row from source time t (one per 1/fps), scaled to size, in one FFmpeg run.
+        /// Scrubbing asks for neighbouring frames one after another, and the expensive part of a grab is starting
+        /// FFmpeg and decoding from the keyframe before t, so taking the following frames in the same run costs
+        /// little and fills the cache ahead of the pointer. Frames arrive through gotFrame as (source time, bitmap);
+        /// the receiver owns them. Stops early when stop() says so. Returns how many frames were delivered.
+        /// </summary>
+        public static int GrabRun(string path, double t, Size size, string preFilters, int count, double fps, bool sharp,
+            Action<double, Bitmap> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
+        {
+            t = Math.Max(0, t);
+            string args = FFmpeg.InputArgs(path, t) +
+                string.Format(CultureInfo.InvariantCulture,
+                    "-map 0:v:0 -an -sn -dn -frames:v {0} -vf \"{1}fps={2:0.###}:round=down,{3}\" -f rawvideo -pix_fmt bgra pipe:1",
+                    Math.Max(1, count), string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", fps, VideoQuality.ToBgra(size.Width, size.Height, sharp, info));
+            Process p = FFmpeg.Start(args);
+            int n = 0;
+            try
+            {
+                if (started != null) started(p);
+                p.BeginErrorReadLine();
+                var buf = new byte[size.Width * size.Height * 4];
+                var s = p.StandardOutput.BaseStream;
+                while (n < count)
+                {
+                    int off = 0;
+                    while (off < buf.Length)
+                    {
+                        int r = s.Read(buf, off, buf.Length - off);
+                        if (r <= 0) return n;
+                        off += r;
+                    }
+                    gotFrame(t + n / fps, Pixels.FromBgra(buf, size.Width, size.Height));
+                    n++;
+                    if (stop != null && stop()) return n;
+                }
+                return n;
             }
             finally { FFmpeg.KillQuietly(p); }
         }

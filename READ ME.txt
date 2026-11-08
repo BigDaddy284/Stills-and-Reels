@@ -1,4 +1,4 @@
-Stills & Reels 2.3
+Stills & Reels 2.4
 ==================
 (formerly Picture Preview)
 
@@ -6,6 +6,14 @@ Stills & Reels 2.3
 2. Double-click StillsAndReels.exe. There's nothing to install.
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
+
+Video editor playback and scrubbing (new in 2.4)
+- The timeline playhead moves with the preview while it plays.
+- Dragging the playhead shows the frame under it as you drag; frames are decoded ahead of
+  the pointer and kept, so dragging back over the same stretch is instant. The frame is drawn
+  quickly while you drag and sharply at full size when you let go.
+- Frame stepping (, and .) is quicker, the timeline repaints only what changed during playback,
+  the sound of imported videos is ready sooner, and export is a little faster.
 
 Snip windows and taskbar shortcuts (new in 2.3)
 - The Snip and Video snip windows are now windows of their own, each with its own taskbar

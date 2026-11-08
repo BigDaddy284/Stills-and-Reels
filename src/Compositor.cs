@@ -408,19 +408,26 @@ namespace StillsAndReels
         }
     }
 
-    /// <summary>Single-frame grabs with a small cache (paused preview and scrubbing).</summary>
+    /// <summary>
+    /// Frame grabs for the paused preview and scrubbing, with a cache. Each grab decodes a short run of frames
+    /// from the wanted one onwards (see FrameGrabber.GrabRun), so dragging the playhead mostly finds the next
+    /// frame already decoded instead of starting FFmpeg again for every pixel the pointer moves.
+    /// </summary>
     internal sealed class StillFrames : IFrameSource
     {
         readonly Dictionary<string, Bitmap> cache = new Dictionary<string, Bitmap>();
         readonly LinkedList<string> lru = new LinkedList<string>();
-        const int MaxEntries = 28;
-        const long MaxBytes = 140L * 1024 * 1024;
+        const int MaxEntries = 400;
+        const long MaxBytes = 320L * 1024 * 1024;
+        const long RunBytes = 36L * 1024 * 1024;   // decoded ahead per grab, at most one second
         long bytes;
         readonly object procLock = new object();
         Process current;
         volatile int cancelGen;
 
         public Func<bool> IsCancelled = () => false;
+        /// <summary>Live scrubbing: fast scaling and frames read ahead; otherwise sharp single frames.</summary>
+        public bool Live;
 
         public void Cancel()
         {
@@ -428,9 +435,9 @@ namespace StillsAndReels
             lock (procLock) { FFmpeg.KillQuietly(current); current = null; }
         }
 
-        static string Key(Clip c, MediaItem m, double src, Size size)
+        static string Key(Clip c, MediaItem m, double src, Size size, bool sharp)
         {
-            return m.Id + "|" + Math.Round(src * 1000) + "|" + size.Width + "x" + size.Height + "|" + SourceFilters.Pre(c, false) + "|" + m.SourcePath;
+            return m.Id + "|" + Math.Round(src * 1000) + "|" + size.Width + "x" + size.Height + "|" + (sharp ? "s|" : "f|") + SourceFilters.Pre(c, false) + "|" + m.SourcePath;
         }
 
         public Bitmap Get(Clip c, MediaItem m, double t, Size size)
@@ -449,11 +456,22 @@ namespace StillsAndReels
             double src = Math.Max(0, c.SourceTime(t));
             if (dur > 0) src = Math.Min(src, Math.Max(0, dur - fd * 0.5));
             src = Math.Floor(src / fd + 1e-6) * fd; // whole frames
-            string key = Key(c, m, src, size);
+            bool sharp = !Live;
+            string key = Key(c, m, src, size, sharp);
             Bitmap cached;
             if (cache.TryGetValue(key, out cached)) { Touch(key); return cached; }
+            // while scrubbing, a sharp frame of the same moment does as well
+            if (Live)
+            {
+                string alt = Key(c, m, src, size, true);
+                if (cache.TryGetValue(alt, out cached)) { Touch(alt); return cached; }
+            }
             int gen = cancelGen;
             Bitmap frame = null;
+            string pre = SourceFilters.Pre(c, false);
+            long frameBytes = (long)size.Width * size.Height * 4;
+            int run = (int)Math.Max(1, Math.Min(Math.Round(1 / fd), RunBytes / Math.Max(1, frameBytes)));
+            if (!Live) run = Math.Min(run, 8); // paused: a few frames ahead for stepping with , and .
             double[] tries = { src, src - fd * 2, src - 0.3, src - 1.0 };
             foreach (var tt in tries)
             {
@@ -461,14 +479,32 @@ namespace StillsAndReels
                 if (gen != cancelGen || IsCancelled()) return null;
                 try
                 {
-                    frame = FrameGrabber.Grab(m.SourcePath, Math.Max(0, tt), size, SourceFilters.Pre(c, false), p => { lock (procLock) current = p; }, m.Info);
+                    var got = new List<KeyValuePair<double, Bitmap>>();
+                    FrameGrabber.GrabRun(m.SourcePath, Math.Max(0, tt), size, pre, run, 1 / fd, sharp,
+                        (st, b) => got.Add(new KeyValuePair<double, Bitmap>(st, b)),
+                        () => gen != cancelGen,
+                        p => { lock (procLock) current = p; }, m.Info);
+                    foreach (var kv in got)
+                    {
+                        double ft = Math.Floor(kv.Key / fd + 0.5) * fd;
+                        string k = Key(c, m, ft, size, sharp);
+                        Bitmap have;
+                        if (cache.TryGetValue(k, out have)) { kv.Value.Dispose(); Touch(k); if (k == key) frame = have; continue; }
+                        Put(k, kv.Value);
+                        if (k == key) frame = kv.Value;
+                    }
+                    if (frame == null && got.Count > 0 && tt < src)
+                    {
+                        // the file ends before src: its last frame stands in
+                        frame = new Bitmap(got[got.Count - 1].Value);
+                        Put(key, frame);
+                    }
                 }
                 catch { frame = null; }
                 lock (procLock) current = null;
                 if (frame != null || gen != cancelGen) break;
             }
-            if (frame == null || gen != cancelGen) { if (frame != null) frame.Dispose(); return null; }
-            Put(key, frame);
+            if (frame == null || gen != cancelGen) return null;
             return frame;
         }
 
