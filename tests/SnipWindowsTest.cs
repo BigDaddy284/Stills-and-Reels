@@ -1,10 +1,14 @@
 // Snip windows, taskbar shortcuts and the snip timer (2.3).
 // Run on Xvfb with one of:
 //   windows     the Snip and Video snip windows are separate taskbar windows: not owned by the main window,
-//               with their own minimise and maximise, and minimising one leaves the others alone
-//   start pic   started as from the taskbar's Pic Snip (--picsnip): main window minimised, Snip window open on screen,
-//               closing the Snip window closes the app        (start vid: the same with Video snip)
-//   keep        started from Pic Snip, then the main window is opened: closing the Snip window leaves the app open
+//               with their own minimise and maximise, and minimising one leaves the others alone; closing the
+//               main window leaves them open
+//   start pic   started as from the taskbar's Pic Snip (--picsnip): no main window shown (no taskbar button), Snip
+//               window open on screen, closing the Snip window closes the app   (start vid: the same with Video snip)
+//   keep        started from Pic Snip, then the main window is opened (Paste into editor): closing the Snip window
+//               leaves the app open
+//   hide        started normally with both snip windows open: closing the main window hides it and leaves the snip
+//               windows running; closing the last snip window ends the app
 //   timer       a 3 s snip timer: the Snip window disappears at once, the selection appears after 3 s, the choice
 //               is remembered; Esc and clicking the countdown cancel it
 //   args        --picsnip / --vidsnip parsing, passing a request to an open copy, the jump list call
@@ -30,6 +34,7 @@ class T {
       case "windows": Windows(); break;
       case "start": Start(a[1]=="vid" ? "vidsnip" : "picsnip", false); break;
       case "keep": Start("picsnip", true); break;
+      case "hide": HideMain(); break;
       case "timer": Timer(); break;
       case "args": Args(); break;
     }
@@ -72,7 +77,9 @@ class T {
               mf.GetMethod("OpenSnip", BF).Invoke(f,null); },
       () => { Check(pic.WindowState == FormWindowState.Normal, "Snip menu brings a minimised Snip window back");
               f.Close(); },
-      () => { Check(f.IsDisposed && pic.IsDisposed && vid.IsDisposed, "closing the main window closes both snip windows"); });
+      () => { Check(!f.IsDisposed && !f.Visible && !pic.IsDisposed && !vid.IsDisposed, "closing the main window hides it and leaves both snip windows open");
+              pic.Close(); vid.Close(); },
+      () => { Check(f.IsDisposed, "the app ends once both snip windows are closed"); });
   }
 
   static void Start(string request, bool openMain){
@@ -82,18 +89,37 @@ class T {
     Steps(f, 1000,
       () => { },
       () => { w = Field(f, field);
-              if (f.WindowState != FormWindowState.Minimized && Type.GetType("Mono.Runtime") != null && (bool)mf.GetField("snipOnly", BF).GetValue(f))
-                // about 1 run in 8, Xvfb + openbox maps a window that asked to start minimised as a normal window
-                // (no resize event ever arrives). Windows shows it minimised synchronously. The app's own state is checked.
-                Console.WriteLine("NOTE window manager did not minimise the main window (Linux-only race); the app still treats it as waiting");
-              else Check(f.WindowState == FormWindowState.Minimized, "main window starts minimised");
+              Check(!f.Visible && f.IsHandleCreated && !f.IsDisposed, "main window is not shown at start (the app runs for the snip window alone)");
+              Check((bool)mf.GetField("hidden", BF).GetValue(f), "main window counts as hidden");
               Check(w != null && w.Visible, field+" window opened at start");
               if (w != null) Check(OnScreen(w), field+" window is on screen at "+w.Bounds); },
       () => { if (openMain) mf.GetMethod("ShowMain", BF).Invoke(f,null); },
-      () => { if (openMain) Check(f.WindowState != FormWindowState.Minimized, "main window opened");
+      () => { if (openMain) Check(f.Visible && f.WindowState != FormWindowState.Minimized, "main window opened by Paste into editor");
               if (w != null) w.Close(); },
       () => { if (openMain) { Check(!f.IsDisposed && f.Visible, "app stays open after the snip window closes (main window was opened)"); f.Close(); }
               else Check(f.IsDisposed, "app closes with the snip window when started just for it"); });
+  }
+
+  static void HideMain(){
+    var f = (Form)Activator.CreateInstance(mf, BF, null, new object[]{null}, null);
+    Form pic = null, vid = null;
+    Steps(f, 1000,
+      () => { mf.GetMethod("OpenSnip", BF).Invoke(f,null); mf.GetMethod("OpenVideoSnip", BF).Invoke(f,null); },
+      () => { pic = Field(f, "snip"); vid = Field(f, "videoSnip");
+              Check(pic != null && pic.Visible && vid != null && vid.Visible, "both snip windows open");
+              f.Close(); },
+      () => { Check(!f.IsDisposed && !f.Visible, "closing the main window hides it while snip windows are open");
+              Check(pic != null && !pic.IsDisposed && pic.Visible, "Snip stays open after the main window is closed");
+              Check(vid != null && !vid.IsDisposed && vid.Visible, "Video snip stays open after the main window is closed");
+              pic.Close(); },
+      () => { Check(!f.IsDisposed, "the app stays running while Video snip is open");
+              Check(pic.IsDisposed, "Snip closed on its own");
+              mf.GetMethod("ShowMain", BF).Invoke(f,null); },
+      () => { Check(f.Visible && !f.IsDisposed, "the main window can be brought back (Add to video editor)");
+              f.Close(); },
+      () => { Check(!f.IsDisposed && !f.Visible, "closed again: hidden again while Video snip is open");
+              vid.Close(); },
+      () => { Check(f.IsDisposed, "the app ends when the last snip window closes"); });
   }
 
   static void Timer(){

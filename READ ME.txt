@@ -1,4 +1,4 @@
-Stills & Reels 2.4
+Stills & Reels 2.5
 ==================
 (formerly Picture Preview)
 
@@ -6,6 +6,13 @@ Stills & Reels 2.4
 2. Double-click StillsAndReels.exe. There's nothing to install.
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
+
+Snip windows on their own (new in 2.5)
+- Pic Snip and Vid Snip from the taskbar no longer start the main window: only the snip
+  window appears, with its own taskbar button. The main window opens when you choose Paste
+  into editor or Add to video editor, and closing the last snip window ends the app.
+- Closing the main window while a snip window is open leaves the snip window running (the
+  main window asks about unsaved work as usual, then goes away). File > Exit closes everything.
 
 Video editor playback and scrubbing (new in 2.4)
 - The timeline playhead moves with the preview while it plays.
@@ -23,9 +30,9 @@ Snip windows and taskbar shortcuts (new in 2.3)
   them, and minimising a Snip window leaves the main window alone.
 - Pin StillsAndReels.exe to the taskbar (start it, right-click its taskbar icon, "Pin to taskbar"),
   then right-click the icon: "Pic Snip" and "Vid Snip" open straight into that snip tool.
-  If the app is already open, the snip window opens there. Started on its own, the main window
-  waits minimised in the taskbar, and closing the snip window closes the app (unless you
-  opened the main window meanwhile, or used Paste into editor / Add to video editor).
+  If the app is already open, the snip window opens there. Started on its own, only the snip
+  window appears; Paste into editor / Add to video editor open the main window, and closing
+  the last window ends the app.
   The shortcuts are refreshed every time the app starts, so moving the exe is fine.
 - Snip timer, like Snip & Sketch: the delay button in the Snip bar offers No delay, 3, 5 or
   10 seconds. With a delay, New snip hides the Snip window and counts down in the corner of

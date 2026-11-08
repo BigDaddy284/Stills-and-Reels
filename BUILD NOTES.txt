@@ -1,4 +1,4 @@
-Stills & Reels 2.4 - source
+Stills & Reels 2.5 - source
 ===========================
 C# WinForms, .NET Framework 4.8. About 17,000 lines in src/. Built on Linux with Mono (mcs) and
 mingw windres; the result is a single Windows exe.
@@ -40,9 +40,9 @@ Layout
                          VideoEditorView on Xvfb and checks the playhead moves steadily, then scrubs from the UI;
                          'coarse' drags 1.3 s per step over a long video (15 minutes or more, e.g. testsrc2) and checks
                          the frames come from batched keyframes, far quicker than exact frames),
-                         SnipWindowsTest.cs (separate snip windows, Pic Snip / Vid Snip start-up, the snip
-                         timer, shortcut arguments; run with 'windows', 'start pic', 'start vid', 'keep',
-                         'timer' or 'args'. Needs a window manager on the Xvfb display for minimise and
+                         SnipWindowsTest.cs (separate snip windows, Pic Snip / Vid Snip start-up with no main window,
+                         hiding the main window while snips stay open, the snip timer, shortcut arguments; run with
+                         'windows', 'start pic', 'start vid', 'keep', 'hide', 'timer' or 'args'. Needs a window manager on the Xvfb display for minimise and
                          maximise: DISPLAY=:99 openbox &),
                          pickup.cs (pick-up helpers: hidden extensions, picked-picture files),
                          ExportTest.cs (exports one video through the editor's ExportJob; compare

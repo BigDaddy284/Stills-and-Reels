@@ -3,6 +3,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("Stills & Reels")]
 [assembly: AssemblyProduct("Stills & Reels")]
 [assembly: AssemblyDescription("Picture and video viewer and editor")]
-[assembly: AssemblyVersion("2.4.0.0")]
-[assembly: AssemblyFileVersion("2.4.0.0")]
+[assembly: AssemblyVersion("2.5.0.0")]
+[assembly: AssemblyFileVersion("2.5.0.0")]
 [assembly: ComVisible(false)]
