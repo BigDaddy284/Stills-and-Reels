@@ -11,7 +11,9 @@ Video editor playback and scrubbing (new in 2.4)
 - The timeline playhead moves with the preview while it plays.
 - Dragging the playhead shows the frame under it as you drag; frames are decoded ahead of
   the pointer and kept, so dragging back over the same stretch is instant. The frame is drawn
-  quickly while you drag and sharply at full size when you let go.
+  quickly while you drag and sharply at full size when you let go. On a timeline zoomed out
+  to minutes, dragging shows the nearest keyframe before the pointer (fetched in batches) so
+  the picture keeps up; the exact frame appears when you let go.
 - Frame stepping (, and .) is quicker, the timeline repaints only what changed during playback,
   the sound of imported videos is ready sooner, and export is a little faster.
 

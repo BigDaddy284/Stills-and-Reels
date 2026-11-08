@@ -591,12 +591,14 @@ namespace StillsAndReels
     internal static class FrameGrabber
     {
         /// <summary>Decodes one frame at source time t, scaled to size (after the given extra filters). Returns null at end of file.</summary>
-        public static Bitmap Grab(string path, double t, Size size, string preFilters, Action<Process> started = null, MediaInfo info = null)
+        public static Bitmap Grab(string path, double t, Size size, string preFilters, Action<Process> started = null, MediaInfo info = null, bool keyframeOnly = false, bool sharp = true)
         {
-            string args = FFmpeg.InputArgs(path, Math.Max(0, t)) +
+            // keyframeOnly: the keyframe at or before t, with no decoding of the frames between it and t, so the
+            // grab costs one frame however long the keyframe interval is (used while dragging the playhead fast)
+            string args = (keyframeOnly ? "-skip_frame nokey -noaccurate_seek " : "") + FFmpeg.InputArgs(path, Math.Max(0, t)) +
                 string.Format(CultureInfo.InvariantCulture,
                     "-map 0:v:0 -an -sn -dn -frames:v 1 -vf \"{0}{1}\" -f rawvideo -pix_fmt bgra pipe:1",
-                    string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", VideoQuality.ToBgra(size.Width, size.Height, true, info));
+                    string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", VideoQuality.ToBgra(size.Width, size.Height, sharp, info));
             Process p = FFmpeg.Start(args);
             try
             {
@@ -655,6 +657,81 @@ namespace StillsAndReels
                 return n;
             }
             finally { FFmpeg.KillQuietly(p); }
+        }
+
+        /// <summary>
+        /// Decodes up to count keyframes from the one at or before source time t onwards, scaled to size, in one
+        /// FFmpeg run. Only keyframes are decoded, so each costs a single frame however far apart they are, and a
+        /// run covers tens of seconds of video for the price of one FFmpeg start. Used while the playhead is
+        /// dragged over a zoomed-out timeline, where a pixel is a second or more. gotFrame receives each frame
+        /// with its time in the file (from FFmpeg's showinfo); the receiver owns the bitmaps.
+        /// </summary>
+        public static int GrabKeyframes(string path, double t, Size size, string preFilters, int count,
+            Action<double, Bitmap> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
+        {
+            t = Math.Max(0, t);
+            var inv = CultureInfo.InvariantCulture;
+            // -copyts keeps the file's own timestamps in showinfo; -fps_mode passthrough stops FFmpeg duplicating
+            // frames to fill the gaps between keyframes
+            string args = string.Format(inv,
+                "-hide_banner -nostdin -loglevel info -skip_frame nokey -noaccurate_seek -copyts {0}-protocol_whitelist file -i {1} " +
+                "-map 0:v:0 -an -sn -dn -fps_mode passthrough -frames:v {2} -vf \"{3}showinfo,{4}\" -f rawvideo -pix_fmt bgra pipe:1",
+                t > 0.0005 ? "-ss " + t.ToString("0.###", inv) + " " : "", FFmpeg.Quote(path), Math.Max(1, count),
+                string.IsNullOrEmpty(preFilters) ? "" : preFilters + ",", VideoQuality.ToBgra(size.Width, size.Height, false, info));
+            var times = new Dictionary<int, double>();
+            var rx = new System.Text.RegularExpressions.Regex(@"\bn:\s*(\d+)\b.*?\bpts_time:\s*(-?[0-9.]+)");
+            Process p = FFmpeg.Start(args);
+            var frames = new List<Bitmap>();
+            try
+            {
+                if (started != null) started(p);
+                p.ErrorDataReceived += (s, e) =>
+                {
+                    if (e.Data == null) return;
+                    var mm = rx.Match(e.Data);
+                    if (!mm.Success) return;
+                    int n; double pt;
+                    if (int.TryParse(mm.Groups[1].Value, NumberStyles.Integer, inv, out n) && double.TryParse(mm.Groups[2].Value, NumberStyles.Float, inv, out pt))
+                        lock (times) times[n] = pt;
+                };
+                p.BeginErrorReadLine();
+                var buf = new byte[size.Width * size.Height * 4];
+                var str = p.StandardOutput.BaseStream;
+                while (frames.Count < count)
+                {
+                    int off = 0;
+                    while (off < buf.Length)
+                    {
+                        int r = str.Read(buf, off, buf.Length - off);
+                        if (r <= 0) break;
+                        off += r;
+                    }
+                    if (off < buf.Length) break;
+                    frames.Add(Pixels.FromBgra(buf, size.Width, size.Height));
+                    if (stop != null && stop()) break;
+                }
+                // the showinfo lines for the last frames may still be on their way; the process ends by itself
+                // after count frames, otherwise it is stopped below
+                if (!p.WaitForExit(1500)) FFmpeg.KillQuietly(p);
+                else p.WaitForExit(); // drains the stderr reader
+                int delivered = 0;
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    double pt;
+                    bool have;
+                    lock (times) have = times.TryGetValue(i, out pt);
+                    if (!have) { frames[i].Dispose(); continue; }
+                    gotFrame(pt, frames[i]);
+                    delivered++;
+                }
+                frames.Clear();
+                return delivered;
+            }
+            finally
+            {
+                FFmpeg.KillQuietly(p);
+                foreach (var b in frames) b.Dispose();
+            }
         }
 
         /// <summary>Full-resolution frame (used for freeze frames).</summary>

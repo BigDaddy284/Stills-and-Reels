@@ -3,6 +3,10 @@
 //                                                            consecutive frames far faster than one FFmpeg run each
 //   mono ScrubTest.exe <StillsAndReels.exe> <video> play    the playhead must move while the preview plays
 //                                                            (run on Xvfb: DISPLAY=:99)
+//   mono ScrubTest.exe <StillsAndReels.exe> <video> coarse  a fast drag over a long video (a second or more per
+//                                                            mouse event): each frame must come from a keyframe-only
+//                                                            grab, far quicker than decoding up to it (use a video of
+//                                                            20 minutes or more, e.g. tests make one with testsrc2)
 using System; using System.Collections; using System.Collections.Generic; using System.Diagnostics; using System.Drawing;
 using System.Reflection; using System.Threading; using System.Windows.Forms;
 class T {
@@ -19,7 +23,7 @@ class T {
   [STAThread] static int Main(string[] a) {
     asm = Assembly.LoadFrom(a[0]);
     Ty("ImageCache").GetMethod("Initialize").Invoke(null,null);
-    if (a[2] == "scrub") Scrub(a[1]); else Play(a[1]);
+    if (a[2] == "scrub") Scrub(a[1]); else if (a[2] == "coarse") Coarse(a[1]); else Play(a[1]);
     Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
     return fails == 0 ? 0 : 1;
   }
@@ -81,6 +85,60 @@ class T {
     var last = (Bitmap)get.Invoke(frames, new object[]{clip, mi, dur + 0.5, size});
     Check(last != null, "a time past the end of the file still shows the last frame");
     Call(frames,"Dispose");
+  }
+
+  // Drags over a long video with a second or more between mouse events, as a zoomed-out timeline does.
+  static void Coarse(string video) {
+    object info; var mi = MediaFor(video, out info);
+    var clip = ClipFor(info);
+    double dur = (double)Get(info,"Duration");
+    Check(dur >= 600, "the test video is long (" + (int)dur + " s)");
+    var size = new Size(640, 360);
+    var get = typeof(T).Assembly == null ? null : Ty("StillFrames").GetMethod("Get");
+    // the old way, for comparison: one exact frame per position, decoded from the keyframe before it
+    var plain = Activator.CreateInstance(Ty("StillFrames"), true);
+    var sw = Stopwatch.StartNew();
+    int n = 0;
+    for (double t = dur * 0.8; t < dur * 0.8 + 12 && n < 12; t += 1.0, n++) get.Invoke(plain, new object[]{clip, mi, t, size});
+    double exactMs = sw.Elapsed.TotalMilliseconds / n;
+    Console.WriteLine("exact frames, 1 s apart, late in the file: " + (int)exactMs + " ms each");
+    Call(plain,"Dispose");
+    // live drag: the first position is a run (fine), from the second on the step is coarse
+    var live = Activator.CreateInstance(Ty("StillFrames"), true);
+    Set(live,"Live",true);
+    get.Invoke(live, new object[]{clip, mi, dur * 0.8, size});
+    get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 1.3, size});
+    sw.Restart();
+    int got = 0, distinct = 0; Bitmap prev = null; double worst = 0;
+    for (int i = 2; i < 42; i++) {
+      var s1 = Stopwatch.StartNew();
+      var b = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + i * 1.3, size});
+      double ms = s1.Elapsed.TotalMilliseconds; if (ms > worst) worst = ms;
+      if (b != null) { got++; if (!ReferenceEquals(b, prev)) distinct++; prev = b; }
+    }
+    double liveMs = sw.Elapsed.TotalMilliseconds / 40;
+    Console.WriteLine("live drag, 1.3 s per step: " + got + "/40 frames, " + distinct + " distinct, " + (int)liveMs + " ms each, worst " + (int)worst + " ms");
+    Check(got == 40, "every step of a coarse drag gets a frame");
+    Check(distinct >= 24, "the frames change as the drag goes on: one per keyframe passed (" + distinct + " of about 26 with keyframes 2 s apart)");
+    Check(liveMs < exactMs * 0.6, "a coarse-drag frame costs well under an exact frame");
+    // dragging back over the same stretch is cached
+    sw.Restart();
+    for (int i = 41; i >= 2; i--) get.Invoke(live, new object[]{clip, mi, dur * 0.8 + i * 1.3, size});
+    Console.WriteLine("back over the same 40 steps: " + (int)sw.Elapsed.TotalMilliseconds + " ms in all");
+    Check(sw.Elapsed.TotalMilliseconds < exactMs * 2, "cached keyframes are instant");
+    // the exact frame when the drag ends never reuses a keyframe stand-in
+    Set(live,"Live",false);
+    var exact = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    var standIn = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    Check(exact != null && ReferenceEquals(exact, standIn), "the exact frame is cached once the drag ends");
+    bool differs = false;
+    Set(live,"Live",true);
+    // the stand-in for that moment was cached under its own key; find it by asking again with a coarse step
+    get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 30 * 1.3, size});
+    var again = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    differs = !ReferenceEquals(again, exact);
+    Check(!differs, "once the exact frame exists, dragging over it shows the exact frame, not the keyframe");
+    Call(live,"Dispose");
   }
 
   // Plays the timeline in a real VideoEditorView and watches the playhead.
