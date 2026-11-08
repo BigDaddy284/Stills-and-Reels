@@ -42,7 +42,7 @@ namespace StillsAndReels
         int generation;
         int explorerCount = -1;
         bool follow = true;
-        readonly string startupFile;
+        string startupFile;
         string transientStatus;
         readonly System.Windows.Forms.Timer statusTimer = new System.Windows.Forms.Timer { Interval = 2500 };
 
@@ -83,6 +83,9 @@ namespace StillsAndReels
         // window closes the app unless the main window has been opened meanwhile
         readonly string startSnip;
         bool snipOnly;
+        bool hidden;          // the main window is not shown: the app runs for its snip windows alone (Pic Snip / Vid Snip)
+        bool servicesStarted; // Explorer following, click pick-up and the clipboard watcher run once the main window is shown
+        bool exiting;         // closing for real (Windows shutting down, or the last window gone), not hiding
         bool restoreMaximized;     // the state to come back to from minimised
 
         public MainForm(string fileToOpen) : this(fileToOpen, null) { }
@@ -151,8 +154,11 @@ namespace StillsAndReels
             LoadSettings();
             if (startSnip != null)
             {
+                // started for a snip window alone: the main window is not shown at all (no taskbar button) until
+                // Paste into editor or Add to video editor asks for it
                 restoreMaximized = WindowState == FormWindowState.Maximized;
-                WindowState = FormWindowState.Minimized;
+                hidden = true;
+                snipOnly = true;
             }
             Theme.Changed += (s, e) => ApplyTheme();
 
@@ -179,10 +185,49 @@ namespace StillsAndReels
             ApplyTheme();
         }
 
+        bool startSnipOpened;
+
+        /// <summary>
+        /// While the app runs for its snip windows alone, the main window stays unshown: Application.Run asks for it
+        /// to be visible, and this keeps it hidden (no taskbar button) while its message loop runs the snip windows.
+        /// </summary>
+        protected override void SetVisibleCore(bool value)
+        {
+            if (hidden && value)
+            {
+                if (!IsHandleCreated) CreateHandle();
+                if (!startSnipOpened && startSnip != null)
+                {
+                    startSnipOpened = true;
+                    Shortcuts.WriteJumpList();
+                    BeginInvoke((Action)(() => OpenSnipFromShortcut(startSnip, true)));
+                }
+                return;
+            }
+            base.SetVisibleCore(value);
+        }
+
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            watcher.Paused = !follow;
+            StartServices();
+            if (!string.IsNullOrEmpty(startupFile) && File.Exists(startupFile)) { OpenAny(startupFile); startupFile = null; }
+            UpdateUi();
+            Shortcuts.WriteJumpList();
+            if (startSnip != null && !startSnipOpened)
+            {
+                startSnipOpened = true;
+                snipOnly = true;
+                BeginInvoke((Action)(() => OpenSnipFromShortcut(startSnip, true)));
+            }
+        }
+
+        /// <summary>Explorer following, click pick-up and the clipboard watcher: started the first time the main window shows.</summary>
+        void StartServices()
+        {
+            if (servicesStarted) return;
+            servicesStarted = true;
+            watcher.Paused = !follow || hidden;
             watcher.Start();
             UpdatePickup();
             pickup.Start();
@@ -192,14 +237,6 @@ namespace StillsAndReels
                 clipWatch.Changed += (s, e2) => OnClipboardChanged();
             }
             catch { clipWatch = null; }
-            if (!string.IsNullOrEmpty(startupFile) && File.Exists(startupFile)) OpenAny(startupFile);
-            UpdateUi();
-            Shortcuts.WriteJumpList();
-            if (startSnip != null)
-            {
-                snipOnly = true;
-                BeginInvoke((Action)(() => OpenSnipFromShortcut(startSnip, true)));
-            }
         }
 
         /// <summary>Opens a snip window for a taskbar shortcut (Pic Snip / Vid Snip). Called from any thread.</summary>
@@ -228,15 +265,42 @@ namespace StillsAndReels
             }
         }
 
-        bool MainMinimised { get { return snipOnly || WindowState == FormWindowState.Minimized; } }
+        bool MainMinimised { get { return hidden || snipOnly || WindowState == FormWindowState.Minimized; } }
 
         /// <summary>Brings the main window up, from minimised too (the snip windows are separate windows).</summary>
         void ShowMain()
         {
             snipOnly = false;
+            if (hidden)
+            {
+                hidden = false;
+                WindowState = restoreMaximized ? FormWindowState.Maximized : FormWindowState.Normal;
+                Show();
+                watcher.Paused = !follow || hidden;
+                UpdatePickup();
+            }
             if (WindowState == FormWindowState.Minimized)
                 WindowState = restoreMaximized ? FormWindowState.Maximized : FormWindowState.Normal;
             Activate();
+        }
+
+        /// <summary>
+        /// Closing the main window while a snip window is open hides it instead, so the snip windows carry on by
+        /// themselves (each closes separately); the app ends when the last window closes. Pictures and projects
+        /// are closed as they would be on a real close, with the same questions about unsaved work.
+        /// </summary>
+        void HideMain()
+        {
+            SaveSettings();
+            hidden = true;
+            snipOnly = true;
+            restoreMaximized = WindowState == FormWindowState.Maximized;
+            editor.NewProject();
+            ReleaseCurrent();
+            videoView.Player.Unload();
+            Hide();
+            watcher.Paused = true;
+            UpdatePickup();
         }
 
         /// <summary>A snip window closed: if the app was started just for it, close the app too.</summary>
@@ -244,7 +308,7 @@ namespace StillsAndReels
         {
             if (!snipOnly || IsDisposed) return;
             if ((snip != null && !snip.IsDisposed) || (videoSnip != null && !videoSnip.IsDisposed)) return;
-            try { BeginInvoke((Action)(() => { if (!IsDisposed) Close(); })); } catch (InvalidOperationException) { }
+            try { BeginInvoke((Action)(() => { if (!IsDisposed) { exiting = true; Close(); } })); } catch (InvalidOperationException) { }
         }
 
         void ApplyTheme()
@@ -290,7 +354,7 @@ namespace StillsAndReels
                 new ToolStripSeparator(),
                 Item("Se&ttings…", Keys.Control | Keys.Oemcomma, (s, e) => ShowSettings(), "Ctrl+,"),
                 new ToolStripSeparator(),
-                Item("E&xit", Keys.Alt | Keys.F4, (s, e) => Close())
+                Item("E&xit", Keys.Alt | Keys.F4, (s, e) => { exiting = true; Close(); })
             });
 
             var editMenu = new ToolStripMenuItem("&Edit");
@@ -560,6 +624,14 @@ namespace StillsAndReels
                 e.Cancel = true;
                 return;
             }
+            bool snipsOpen = (videoSnip != null && !videoSnip.IsDisposed) || (snip != null && !snip.IsDisposed);
+            if (snipsOpen && !exiting && e.CloseReason == CloseReason.UserClosing && !hidden)
+            {
+                // the snip windows stay: hide the main window instead of closing the app
+                e.Cancel = true;
+                HideMain();
+                return;
+            }
             // Closing a snip window clears its field (FormClosed handler), so keep a local reference.
             var vs = videoSnip;
             if (vs != null && !vs.IsDisposed)
@@ -628,7 +700,7 @@ namespace StillsAndReels
             videoView.Visible = videos;
             canvas.Visible = !videos;
             watcher.WantVideos = videos;
-            watcher.Paused = !follow;
+            watcher.Paused = !follow || hidden;
             topBar.Modes.Mode = m;
             if (videos) videoView.Surface.Focus(); else canvas.Focus();
             UpdateUi();
@@ -651,7 +723,7 @@ namespace StillsAndReels
                 videoView.Visible = false;
                 canvas.Visible = true;
                 watcher.WantVideos = false;
-                watcher.Paused = !follow;
+                watcher.Paused = !follow || hidden;
                 sidebar.Visible = true;
                 topBar.Modes.Mode = mode;
                 canvas.SetEmptyState(Ico.Pencil, "Pick a picture to edit",
@@ -705,7 +777,7 @@ namespace StillsAndReels
             editor.Visible = true;
             editor.BringToFront();
             watcher.WantVideos = true;
-            watcher.Paused = !follow;
+            watcher.Paused = !follow || hidden;
             topBar.Modes.Mode = mode;
             if (videoPath != null && videoInfo != null && (fromViewer || editor.Project.IsEmpty)) editor.OpenFromViewer(videoPath);
             editor.Focus();
@@ -809,6 +881,7 @@ namespace StillsAndReels
 
         void OnExplorerSelection(string path, FileKind kind)
         {
+            if (hidden) return;
             if (!follow) return;
             if (kind == FileKind.Video)
             {
@@ -1007,13 +1080,14 @@ namespace StillsAndReels
         {
             bool recording = videoSnip != null && !videoSnip.IsDisposed;
             watcher.FollowDesktop = pickFiles;
-            pickup.WantVideos = mode == AppMode.Videos || mode == AppMode.VideoEdit;
-            pickup.WantFiles = follow && pickFiles && !recording;
-            pickup.WantPictures = follow && pickClicks && !recording && (mode == AppMode.Pictures || mode == AppMode.PictureEdit);
+            pickup.WantVideos = !hidden && (mode == AppMode.Videos || mode == AppMode.VideoEdit);
+            pickup.WantFiles = !hidden && follow && pickFiles && !recording;
+            pickup.WantPictures = !hidden && follow && pickClicks && !recording && (mode == AppMode.Pictures || mode == AppMode.PictureEdit);
         }
 
         void OnPictureClicked(Bitmap bmp, string name)
         {
+            if (hidden) { bmp.Dispose(); return; }
             if (!follow || !pickClicks || (mode != AppMode.Pictures && mode != AppMode.PictureEdit)) { bmp.Dispose(); return; }
             if (edit != null && edit.IsDirty)
             {
@@ -1045,6 +1119,7 @@ namespace StillsAndReels
 
         void OnClipboardChanged()
         {
+            if (hidden) return;
             if (!follow || !pickCopied || mode == AppMode.PictureEdit) return;   // in Edit, a copy is for pasting
             if (ClipboardWatcher.FromThisApp()) return;
             clipTimer.Stop();
@@ -1085,7 +1160,7 @@ namespace StillsAndReels
         void SetFollow(bool on)
         {
             follow = on;
-            watcher.Paused = !follow;
+            watcher.Paused = !follow || hidden;
             UpdateUi();
         }
 
@@ -1556,7 +1631,7 @@ namespace StillsAndReels
         void ShowAbout()
         {
             MessageBox.Show(this,
-                AppName + " 2.4\n\n" +
+                AppName + " 2.5\n\n" +
                 "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
                 "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
                 "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +

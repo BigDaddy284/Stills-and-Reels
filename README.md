@@ -8,7 +8,7 @@
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![.NET Framework 4.8](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)
-![Version 2.4](https://img.shields.io/badge/version-2.4-7C5CFF)
+![Version 2.5](https://img.shields.io/badge/version-2.5-7C5CFF)
 ![Offline](https://img.shields.io/badge/network-none-2EA043)
 [![Licence: GPLv3](https://img.shields.io/badge/licence-GPLv3-blue)](LICENSE)
 
@@ -180,6 +180,8 @@ Recording changes must pass the whole of [tests/TEST PLAN.md](tests/TEST%20PLAN.
 | `READ ME.txt` | The read-me that ships with the app, including the full licence and credits text |
 
 ## What's new
+
+**2.5:** Pic Snip and Vid Snip from the taskbar run on their own, with no main window until you choose Paste into editor or Add to video editor; closing the main window leaves open snip windows running, and the app ends when the last window closes.
 
 **2.4:** the timeline playhead moves with the preview while it plays, dragging the playhead shows the frame under it as you go (frames are decoded ahead of the pointer and kept), frame stepping is quicker, the timeline repaints only what changed during playback, imported sound is ready sooner, and export overlaps composing and encoding.
 

@@ -1,6 +1,11 @@
 # Changelog
 
-## 2.4 (current)
+## 2.5 (current)
+
+- **Snip windows on their own.** Pic Snip and Vid Snip from the taskbar (and `--picsnip` / `--vidsnip`) no longer start the main window: only the snip window appears, with its own taskbar button. The main window opens when you choose **Paste into editor** or **Add to video editor**, and closing the last snip window ends the app. (The main window used to wait minimised in the taskbar.)
+- **Windows close separately.** Closing the main window while a snip window is open hides it instead of closing the app, after the usual questions about unsaved pictures and projects, so the snip window carries on; the app ends when the last window closes. **File > Exit** closes everything at once, as does Windows shutting down.
+
+## 2.4
 
 Video editor: playback, scrubbing and speed.
 

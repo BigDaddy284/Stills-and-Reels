@@ -14,12 +14,17 @@ class T {
       step++;
       if (step==1){ foreach (var m in a) mf.GetMethod(m, BindingFlags.NonPublic|BindingFlags.Instance).Invoke(f,null);
         Console.WriteLine("open forms: "+Application.OpenForms.Count); }
-      else if (step==2){ try { f.Close(); } catch(Exception ex){ errors++; Console.WriteLine("ERROR: "+ex); } }
-      else { t.Stop(); Console.WriteLine("closed="+f.IsDisposed+" forms left="+Application.OpenForms.Count+" errors="+errors); Application.ExitThread(); }
+      else if (step==2){ try { f.Close(); } catch(Exception ex){ errors++; Console.WriteLine("ERROR: "+ex); }
+        // since 2.5, closing the main window with snip windows open hides it and leaves them running
+        Console.WriteLine("main closed: hidden="+(!f.Visible && !f.IsDisposed)+" forms left="+Application.OpenForms.Count); }
+      else if (step==3){ // closing the snip windows themselves ends the app (Windows shutdown closes them all at once)
+        var open = new System.Collections.Generic.List<Form>(); foreach (Form o in Application.OpenForms) if (!ReferenceEquals(o, f)) open.Add(o);
+        foreach (var o in open) try { o.Close(); } catch(Exception ex){ errors++; Console.WriteLine("ERROR: "+ex); } }
+      else { t.Stop(); Console.WriteLine("closed="+f.IsDisposed+" forms left="+Application.OpenForms.Count+" errors="+errors); if (!f.IsDisposed) errors++; Application.ExitThread(); }
     };
     t.Start();
     Application.Run(f.IsDisposed ? null : new ApplicationContext(f));
-    if (step<3) Console.WriteLine("closed="+f.IsDisposed+" errors="+errors);
+    if (step<4) Console.WriteLine("closed="+f.IsDisposed+" errors="+errors);
     return errors;
   }
 }

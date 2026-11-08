@@ -1,6 +1,6 @@
 # Stills & Reels user guide
 
-This guide covers everything in Stills & Reels 2.4, from first start to exporting a finished video.
+This guide covers everything in Stills & Reels 2.5, from first start to exporting a finished video.
 
 **Contents:** [Getting started](#getting-started) · [The four modes](#the-four-modes) · [Pictures](#pictures) · [Edit picture](#edit-picture) · [Snip](#snip) · [Videos](#videos) · [Video snip](#video-snip-screen-recording) · [Video editor](#video-editor) · [Settings](#settings) · [Your files and privacy](#your-files-and-privacy) · [Keyboard shortcuts](#keyboard-shortcuts) · [Taskbar shortcuts](#taskbar-shortcuts-pic-snip-and-vid-snip) · [Troubleshooting](#troubleshooting)
 
@@ -227,7 +227,9 @@ The first time you use a video feature, Stills & Reels unpacks its built-in vide
 Pin the app to the taskbar: start it, right-click its taskbar icon and choose **Pin to taskbar**. Right-click the pinned icon and you'll find **Pic Snip** and **Vid Snip** under Tasks. Each opens straight into that snip tool:
 
 - If Stills & Reels is already open, the snip window opens in it.
-- If not, the app starts with the main window minimised in the taskbar and the snip window in the middle of the screen. Closing the snip window then closes the app, unless you opened the main window in the meantime (**Paste into editor** and **Add to video editor** open it for you).
+- If not, only the snip window appears, in the middle of the screen, with its own taskbar button; there is no main window until you choose **Paste into editor** or **Add to video editor**, which open it. Closing the last snip window ends the app.
+
+The windows close separately too: closing the main window while a snip window is open leaves the snip window running (the main window asks about unsaved work as usual), and the app ends when the last window closes. **File > Exit** closes everything at once.
 
 The shortcuts are written each time the app starts, so they keep working if you move the exe (start it once from its new place). They run `StillsAndReels.exe --picsnip` and `--vidsnip`, which you can also use in your own shortcuts.
 
