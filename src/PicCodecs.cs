@@ -32,8 +32,176 @@ namespace StillsAndReels
         /// <summary>Reads a picture with FFmpeg and returns its pixels. Throws with a readable message if it can't.</summary>
         public static PicSurface Decode(string file)
         {
-            // the first picture in the file, as a 32-bit bitmap on standard output
-            string args = FFmpeg.InputArgs(file, 0) + "-an -sn -dn -frames:v 1 -f image2pipe -c:v bmp -pix_fmt bgra pipe:1";
+            if (!IsHeif(file))
+                return Run(FFmpeg.InputArgs(file, 0) + "-an -sn -dn -frames:v 1 -f image2pipe -c:v bmp -pix_fmt bgra pipe:1");
+
+            // HEIC and AVIF (phone photos). Big ones are stored as a grid of small tiles that has to be put back
+            // together, and the way up is a note in the file. Both are handled here, the same way whatever the
+            // FFmpeg version does by itself.
+            int turns = 0;
+            try { turns = HeifTurns(ReadHead(file, 1 << 20)); } catch { }
+            TileGrid grid = ParseTileGrid(Probe(file));
+            string input = "-hide_banner -nostdin -loglevel error -noautorotate -protocol_whitelist file -i " + FFmpeg.Quote(file) + " ";
+            PicSurface s;
+            if (grid == null) s = Run(input + "-an -sn -dn -frames:v 1 -f image2pipe -c:v bmp -pix_fmt bgra pipe:1");
+            else
+            {
+                if (grid.Streams == null) throw new InvalidDataException("This photo is stored in tiles in a way Stills & Reels can't put together.");
+                s = Run(input + "-filter_complex " + FFmpeg.Quote(grid.Filter()) + " -map [o] -an -sn -dn -frames:v 1 -f image2pipe -c:v bmp -pix_fmt bgra pipe:1");
+                if (s.Width != grid.Width || s.Height != grid.Height)
+                {
+                    s.Dispose();
+                    throw new InvalidDataException("This photo is stored in tiles in a way Stills & Reels can't put together.");
+                }
+            }
+            if (turns != 0)
+            {
+                // the note counts quarter turns anticlockwise
+                var turned = s.RotateFlip(turns == 1 ? RotateFlipType.Rotate270FlipNone : turns == 2 ? RotateFlipType.Rotate180FlipNone : RotateFlipType.Rotate90FlipNone);
+                s.Dispose();
+                s = turned;
+            }
+            return s;
+        }
+
+        static bool IsHeif(string file)
+        {
+            string ext = (Path.GetExtension(file) ?? "").ToLowerInvariant();
+            return ext == ".heic" || ext == ".heif" || ext == ".avif";
+        }
+
+        static byte[] ReadHead(string file, int max)
+        {
+            using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                var head = new byte[(int)Math.Min(fs.Length, max)];
+                int got = 0, n;
+                while (got < head.Length && (n = fs.Read(head, got, head.Length - got)) > 0) got += n;
+                return head;
+            }
+        }
+
+        /// <summary>What FFmpeg says is in a file (its list of streams), or "" if it can't be asked.</summary>
+        static string Probe(string file)
+        {
+            try
+            {
+                using (var p = FFmpeg.Start("-hide_banner -nostdin -loglevel verbose -protocol_whitelist file -i " + FFmpeg.Quote(file)))
+                {
+                    var errTask = p.StandardError.ReadToEndAsync();
+                    p.StandardOutput.ReadToEnd();
+                    if (!p.WaitForExit(20000)) { FFmpeg.KillQuietly(p); return ""; }
+                    return errTask.Wait(3000) ? errTask.Result : "";
+                }
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>A picture stored as a grid of tiles (HEIC from phones): its full size, and which streams are the tiles.</summary>
+        internal sealed class TileGrid
+        {
+            public int Width, Height, TileWidth, TileHeight, Columns, Rows;
+            /// <summary>The tiles, left to right and top to bottom; null if they couldn't be worked out.</summary>
+            public int[] Streams;
+
+            /// <summary>The FFmpeg filter that lays the tiles out and trims the result to the picture's size.</summary>
+            public string Filter()
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (int i in Streams) sb.Append("[0:").Append(i.ToString(CultureInfo.InvariantCulture)).Append(']');
+                if (Streams.Length == 1) sb.Append("null");
+                else sb.Append("xstack=inputs=").Append(Streams.Length).Append(":grid=").Append(Columns).Append('x').Append(Rows);
+                sb.Append(",crop=").Append(Width).Append(':').Append(Height).Append(":0:0[o]");
+                return sb.ToString();
+            }
+        }
+
+        static readonly System.Text.RegularExpressions.Regex SizeInLine = new System.Text.RegularExpressions.Regex(@"(?<![0-9A-Za-z])(\d{2,5})x(\d{2,5})(?![0-9A-Za-z])");
+        static readonly System.Text.RegularExpressions.Regex StreamLine = new System.Text.RegularExpressions.Regex(@"^\s*Stream #\d+:(\d+)[^:]*: Video:(.*)$");
+
+        /// <summary>Finds a tile grid in FFmpeg's description of a file. Null when the picture is not tiled.</summary>
+        public static TileGrid ParseTileGrid(string log)
+        {
+            if (string.IsNullOrEmpty(log)) return null;
+            TileGrid g = null;
+            var sizes = new List<KeyValuePair<int, Size>>();    // every video stream and its size, in order
+            foreach (string raw in log.Replace("\r", "").Split('\n'))
+            {
+                int at = raw.IndexOf("Tile Grid:", StringComparison.Ordinal);
+                if (at >= 0 && raw.IndexOf("Stream group", StringComparison.Ordinal) >= 0)
+                {
+                    if (g != null) continue;        // the first grid is the main picture
+                    var m = SizeInLine.Match(raw, at);
+                    if (m.Success) g = new TileGrid { Width = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), Height = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture) };
+                    continue;
+                }
+                var sm = StreamLine.Match(raw);
+                if (!sm.Success) continue;
+                var dm = SizeInLine.Match(sm.Groups[2].Value);
+                if (!dm.Success) continue;
+                int index = int.Parse(sm.Groups[1].Value, CultureInfo.InvariantCulture);
+                bool seen = false;
+                foreach (var kv in sizes) if (kv.Key == index) seen = true;
+                if (!seen) sizes.Add(new KeyValuePair<int, Size>(index, new Size(int.Parse(dm.Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(dm.Groups[2].Value, CultureInfo.InvariantCulture))));
+            }
+            if (g == null || g.Width < 1 || g.Height < 1) return null;
+
+            // the tiles all have one size, and there are more of them than of anything else
+            var counts = new Dictionary<Size, int>();
+            foreach (var kv in sizes) { int c; counts.TryGetValue(kv.Value, out c); counts[kv.Value] = c + 1; }
+            Size tile = Size.Empty; int best = 0;
+            foreach (var kv in counts) if (kv.Value > best) { best = kv.Value; tile = kv.Key; }
+            if (best == 0) return g;
+            g.TileWidth = tile.Width; g.TileHeight = tile.Height;
+            g.Columns = (g.Width + tile.Width - 1) / tile.Width;
+            g.Rows = (g.Height + tile.Height - 1) / tile.Height;
+            int need = g.Columns * g.Rows;
+            if (need < 1 || need > 1024 || best < need) return g;
+            var list = new List<int>();
+            foreach (var kv in sizes) if (kv.Value == tile && list.Count < need) list.Add(kv.Key);
+            g.Streams = list.ToArray();
+            return g;
+        }
+
+        /// <summary>
+        /// The "which way up" note of a HEIC or AVIF file: quarter turns anticlockwise (0 to 3). It lives in the
+        /// file's list of properties, before the picture data.
+        /// </summary>
+        public static int HeifTurns(byte[] d)
+        {
+            if (d == null) return 0;
+            // walk the top-level boxes to the one that holds the properties ("meta")
+            long at = 0;
+            while (at + 8 <= d.Length)
+            {
+                long size = ((long)d[at] << 24) | ((long)d[at + 1] << 16) | ((long)d[at + 2] << 8) | d[at + 3];
+                string type = "" + (char)d[at + 4] + (char)d[at + 5] + (char)d[at + 6] + (char)d[at + 7];
+                int header = 8;
+                if (size == 1)
+                {
+                    if (at + 16 > d.Length) return 0;
+                    size = 0;
+                    for (int i = 0; i < 8; i++) size = (size << 8) | d[at + 8 + i];
+                    header = 16;
+                }
+                else if (size == 0) size = d.Length - at;
+                if (size < header) return 0;
+                if (type == "meta")
+                {
+                    long end = Math.Min(d.Length, at + size);
+                    for (long i = at + header; i + 9 <= end; i++)
+                        if (d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 0 && d[i + 3] == 9 && d[i + 4] == 'i' && d[i + 5] == 'r' && d[i + 6] == 'o' && d[i + 7] == 't')
+                            return d[i + 8] & 3;
+                    return 0;
+                }
+                at += size;
+            }
+            return 0;
+        }
+
+        /// <summary>Runs FFmpeg with arguments that write one bitmap to standard output, and reads it.</summary>
+        static PicSurface Run(string args)
+        {
             Process p = FFmpeg.Start(args);
             PicSurface s = null;
             try
@@ -43,8 +211,7 @@ namespace StillsAndReels
                 try { s = ReadBmp(new BufferedStream(p.StandardOutput.BaseStream, 1 << 16)); }
                 catch (Exception ex) { readError = ex; }
                 if (!p.WaitForExit(60000)) FFmpeg.KillQuietly(p);
-                string log = "";
-                try { if (errTask.Wait(3000)) log = errTask.Result; } catch { }
+                try { errTask.Wait(3000); } catch { }
                 if (s == null)
                 {
                     // FFmpeg's own wording is about streams and packets; say it plainly instead
@@ -60,6 +227,13 @@ namespace StillsAndReels
                 throw;
             }
             finally { p.Dispose(); }
+        }
+
+        /// <summary>Puts a grid of tiles back together (see <see cref="TileGrid"/>). For tests.</summary>
+        internal static PicSurface DecodeTiles(string file, TileGrid grid)
+        {
+            return Run("-hide_banner -nostdin -loglevel error -noautorotate -protocol_whitelist file -i " + FFmpeg.Quote(file) + " -filter_complex " + FFmpeg.Quote(grid.Filter()) +
+                       " -map [o] -an -sn -dn -frames:v 1 -f image2pipe -c:v bmp -pix_fmt bgra pipe:1");
         }
 
         static void ReadExact(Stream st, byte[] buf, int count)

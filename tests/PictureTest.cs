@@ -773,6 +773,51 @@ static class PictureTest
               li.Surface.GetColor(0, 1) == Color.FromArgb(255, 10, 20, 30) && li.Surface.GetColor(1, 1) == Color.FromArgb(255, 200, 100, 50), "a PPM picture opens through FFmpeg, the right way up");
         ImageCache.Delete(li.CachePath); li.Dispose();
 
+        // phone photos (HEIC) stored as a grid of tiles
+        {
+            var log = new System.Text.StringBuilder();
+            log.Append("Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'IMG_0001.HEIC':\n  Duration: N/A, start: 0.000000, bitrate: N/A\n");
+            log.Append("  Stream group #0:0[0x31]: Tile Grid: hevc (Main Still Picture) (hvc1 / 0x31637668), yuvj420p(pc, smpte170m/unknown/unknown), 4032x3024 (default)\n");
+            for (int i = 0; i < 48; i++)
+                log.Append("    Stream #0:" + i + "[0x" + (i + 1).ToString("x") + "]: Video: hevc (Main Still Picture) (hvc1 / 0x31637668), yuvj420p(pc, smpte170m/unknown/unknown), 512x512, 1 fps, 1 tbr, 1 tbn (dependent)\n");
+            log.Append("  Stream #0:48[0x32]: Video: hevc (Main Still Picture) (hvc1 / 0x31637668), yuvj420p(pc, smpte170m/unknown/unknown), 320x240, 1 fps, 1 tbr, 1 tbn\n");
+            var g = PicCodecs.ParseTileGrid(log.ToString());
+            Check(g != null && g.Width == 4032 && g.Height == 3024 && g.TileWidth == 512 && g.Columns == 8 && g.Rows == 6 && g.Streams != null && g.Streams.Length == 48 && g.Streams[47] == 47,
+                "a phone photo's tile grid is understood (4032 x 3024 in 8 x 6 tiles)");
+            Check(g != null && g.Streams != null && g.Filter().StartsWith("[0:0][0:1]") && g.Filter().EndsWith("xstack=inputs=48:grid=8x6,crop=4032:3024:0:0[o]"), "the tiles are laid out in rows and trimmed to the photo's size");
+            Check(PicCodecs.ParseTileGrid("  Stream #0:0[0x1]: Video: hevc (Main Still Picture) (hvc1 / 0x31637668), yuvj420p(pc), 1280x854, 1 fps\n") == null && PicCodecs.ParseTileGrid("") == null, "a photo that is not tiled is read the plain way");
+            var few = PicCodecs.ParseTileGrid("  Stream group #0:0[0x31]: Tile Grid: hevc (Main Still Picture) (hvc1 / 0x31637668), yuvj420p(pc), 4032x3024 (default)\n  Stream #0:0[0x1]: Video: hevc, yuvj420p(pc), 512x512, 1 fps\n");
+            Check(few != null && few.Streams == null, "a grid with tiles missing is refused, never shown as one tile");
+
+            // the way-up note
+            var box = new List<byte>();
+            box.AddRange(new byte[] { 0, 0, 0, 16, (byte)'f', (byte)'t', (byte)'y', (byte)'p', (byte)'h', (byte)'e', (byte)'i', (byte)'c', 0, 0, 0, 0 });
+            var meta = new List<byte> { 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 0, 9, (byte)'i', (byte)'r', (byte)'o', (byte)'t', 3, 9, 9 };
+            int metaSize = 8 + meta.Count;
+            box.AddRange(new byte[] { 0, 0, (byte)(metaSize >> 8), (byte)metaSize, (byte)'m', (byte)'e', (byte)'t', (byte)'a' });
+            box.AddRange(meta);
+            box.AddRange(new byte[] { 0, 0, 0, 17, (byte)'m', (byte)'d', (byte)'a', (byte)'t', 0, 0, 0, 9, (byte)'i', (byte)'r', (byte)'o', (byte)'t', 1 });
+            Check(PicCodecs.HeifTurns(box.ToArray()) == 3, "a HEIC photo's way-up note is read");
+            var noNote = new List<byte>(box.GetRange(0, 16));
+            noNote.AddRange(new byte[] { 0, 0, 0, 12, (byte)'m', (byte)'e', (byte)'t', (byte)'a', 0, 0, 0, 0 });
+            noNote.AddRange(new byte[] { 0, 0, 0, 17, (byte)'m', (byte)'d', (byte)'a', (byte)'t', 0, 0, 0, 9, (byte)'i', (byte)'r', (byte)'o', (byte)'t', 1 });
+            Check(PicCodecs.HeifTurns(noNote.ToArray()) == 0 && PicCodecs.HeifTurns(null) == 0 && PicCodecs.HeifTurns(new byte[5]) == 0, "bytes inside the picture data are never mistaken for that note");
+
+            // putting tiles together, on a stand-in file with six small pictures in it
+            string tiles = F("pt-tiles.mkv");
+            string[] cols = { "red", "lime", "blue", "yellow", "white", "black" };
+            string a = "-hide_banner -nostdin -loglevel error";
+            foreach (var c in cols) a += " -f lavfi -i color=" + c + ":s=64x64:r=1";
+            for (int i = 0; i < cols.Length; i++) a += " -map " + i;
+            a += " -frames:v 1 -c:v ffv1 -pix_fmt bgr0 -y " + FFmpeg.Quote(tiles);
+            using (var pr = FFmpeg.Start(a)) { pr.StandardError.ReadToEnd(); pr.WaitForExit(30000); }
+            var six = new PicCodecs.TileGrid { Width = 180, Height = 120, TileWidth = 64, TileHeight = 64, Columns = 3, Rows = 2, Streams = new[] { 0, 1, 2, 3, 4, 5 } };
+            using (var whole = PicCodecs.DecodeTiles(tiles, six))
+                Check(whole.Width == 180 && whole.Height == 120 && Near(whole.GetColor(10, 10), 255, 0, 0, 6) && Near(whole.GetColor(70, 10), 0, 255, 0, 6) && Near(whole.GetColor(140, 10), 0, 0, 255, 6) &&
+                      Near(whole.GetColor(10, 100), 255, 255, 0, 6) && Near(whole.GetColor(70, 100), 255, 255, 255, 6) && Near(whole.GetColor(170, 110), 0, 0, 0, 6),
+                      "tiles are put back together in the right places and trimmed");
+        }
+
         string junk = F("pt-junk.webp");
         File.WriteAllBytes(junk, System.Text.Encoding.ASCII.GetBytes("this is not a picture at all"));
         string message = null;

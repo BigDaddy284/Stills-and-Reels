@@ -353,6 +353,7 @@ namespace StillsAndReels
         {
             bool viewing = mode == AppMode.Pictures;
             bool pictures = viewing || mode == AppMode.PictureEdit;
+            if (!viewing && ahead != null) DropAhead();      // editing and video need the memory more than a picture read ahead
             bool has = current != null || edit != null;
             miNextPic.Visible = miPrevPic.Visible = miPicFullscreen.Visible = miSlideshow.Visible = miSlideSpeed.Visible = miDetails.Visible = pictures;
             miNextPic.Enabled = miPrevPic.Enabled = miSlideshow.Enabled = viewing && shownPath != null && !ImageCache.IsPicked(shownPath);
