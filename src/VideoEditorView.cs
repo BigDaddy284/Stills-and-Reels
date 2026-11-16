@@ -1298,7 +1298,8 @@ namespace StillsAndReels
         static readonly Dictionary<string, string> TextNames = new Dictionary<string, string>
         {
             { "plain", "Default text" }, { "title", "Title" }, { "subtitle", "Subtitle" }, { "lower", "Lower third" },
-            { "caption", "Caption" }, { "outline", "Outline" }, { "neon", "Neon" }
+            { "caption", "Caption" }, { "outline", "Outline" }, { "neon", "Neon" },
+            { "gradient", "Gradient title" }, { "pop", "Pop-in" }, { "typewriter", "Typewriter" }, { "boxed", "Boxed" }, { "credits", "Credits" }
         };
 
         public static Clip TextPreset(string style)
@@ -1314,6 +1315,13 @@ namespace StillsAndReels
                 case "caption": c.Text = "Caption text"; c.FontSize = 0.05; c.BoxOpacity = 0.6; c.Shadow = false; c.Y = 0.38; c.TextStyle = "plain"; break;
                 case "outline": c.Text = "OUTLINE"; c.FontSize = 0.11; c.Bold = true; c.OutlineWidth = 0.08; c.OutlineColor = unchecked((int)0xFF2668FF); c.Shadow = false; c.TextStyle = "plain"; break;
                 case "neon": c.Text = "Neon"; c.FontSize = 0.11; c.Bold = true; c.OutlineColor = unchecked((int)0xFFFF3CC8); c.Shadow = false; break;
+                case "gradient":
+                    c.Text = "Gradient"; c.FontSize = 0.13; c.Bold = true; c.TextStyle = "plain"; c.AnimIn = "grow"; c.AnimOut = "fade";
+                    c.TextColor = unchecked((int)0xFFFFE14A); c.TextColor2 = unchecked((int)0xFFFF5A3C); break;
+                case "pop": c.Text = "Pop!"; c.FontSize = 0.13; c.Bold = true; c.TextStyle = "plain"; c.AnimIn = "pop"; c.AnimOut = "shrink"; c.OutlineWidth = 0.07; c.OutlineColor = unchecked((int)0xFF2668FF); c.Shadow = false; break;
+                case "typewriter": c.Text = "Typed out, letter by letter"; c.Font = "Consolas"; c.FontSize = 0.055; c.TextStyle = "plain"; c.AnimIn = "type"; c.AnimInTime = 1.6; c.AnimOut = "fade"; c.Y = 0.34; c.Duration = 4; break;
+                case "boxed": c.Text = "Boxed"; c.FontSize = 0.09; c.Bold = true; c.TextStyle = "plain"; c.BoxOpacity = 1; c.BoxColor = unchecked((int)0xFFFFD228); c.TextColor = unchecked((int)0xFF101010); c.Shadow = false; c.AnimIn = "slideup"; c.AnimOut = "fade"; break;
+                case "credits": c.Text = "Directed by\nYour name"; c.FontSize = 0.06; c.TextStyle = "plain"; c.LineSpacing = 0.3; c.AnimIn = "fade"; c.AnimOut = "fade"; c.AnimInTime = 0.8; c.AnimOutTime = 0.8; c.Duration = 4; c.Shadow = false; break;
                 default: c.Text = "Add text"; c.FontSize = 0.08; c.TextStyle = "plain"; break;
             }
             return c;
@@ -1386,6 +1394,10 @@ namespace StillsAndReels
                 case "sharpen": c.Sharpen = c.Sharpen > 0.5 ? 0 : 45; break;
                 case "vignette": c.Vignette = c.Vignette > 0.5 ? 0 : 55; break;
                 case "grain": c.Grain = c.Grain > 0.5 ? 0 : 35; break;
+                case "glow": c.Glow = c.Glow > 0.5 ? 0 : 50; break;
+                case "pixelate": c.Pixelate = c.Pixelate > 0.5 ? 0 : 30; break;
+                case "rgbsplit": c.RgbSplit = c.RgbSplit > 0.5 ? 0 : 40; break;
+                case "mirror": c.Mirror = c.Mirror != 0 ? 0 : 1; break;
                 case "chroma": c.ChromaKey = !c.ChromaKey; break;
                 case "stabilize": c.Stabilize = !c.Stabilize && c.Kind == ClipKind.Video; break;
                 case "fade":
@@ -2096,6 +2108,10 @@ namespace StillsAndReels
                 new Tile { Key = "sharpen", Title = "Sharpen", Icon = Ico.Diamond },
                 new Tile { Key = "vignette", Title = "Vignette", Icon = Ico.Screen },
                 new Tile { Key = "grain", Title = "Film grain", Icon = Ico.Grid },
+                new Tile { Key = "glow", Title = "Glow", Sub = "Soft light around bright parts", Icon = Ico.Sun },
+                new Tile { Key = "pixelate", Title = "Pixelate", Sub = "Mosaic blocks", Icon = Ico.Grid },
+                new Tile { Key = "rgbsplit", Title = "Colour fringes", Sub = "Red and blue pulled apart", Icon = Ico.Layers },
+                new Tile { Key = "mirror", Title = "Mirror", Sub = "One half reflected onto the other", Icon = Ico.FlipH },
                 new Tile { Key = "chroma", Title = "Chroma key", Sub = "Remove a green or blue screen", Icon = Ico.Layers },
                 new Tile { Key = "stabilize", Title = "Stabilise", Sub = "Steadies shaky video (playback and export)", Icon = Ico.Hand },
             };
@@ -2120,6 +2136,10 @@ namespace StillsAndReels
                         case "sharpen": on = c.Sharpen > 0.5; break;
                         case "vignette": on = c.Vignette > 0.5; break;
                         case "grain": on = c.Grain > 0.5; break;
+                        case "glow": on = c.Glow > 0.5; break;
+                        case "pixelate": on = c.Pixelate > 0.5; break;
+                        case "rgbsplit": on = c.RgbSplit > 0.5; break;
+                        case "mirror": on = c.Mirror != 0; break;
                         case "chroma": on = c.ChromaKey; break;
                         case "stabilize": on = c.Stabilize; break;
                     }
@@ -2197,32 +2217,82 @@ namespace StillsAndReels
             }
         }
 
+        static readonly Dictionary<string, Bitmap> transitionThumbs = new Dictionary<string, Bitmap>();
+        static MediaItem thumbA, thumbB;
+        static int thumbTheme;
+
+        static MediaItem ThumbPicture(int id, Color from, Color to, string letter)
+        {
+            var bmp = new Bitmap(192, 108, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            using (var b = new LinearGradientBrush(new Rectangle(0, 0, 192, 108), from, to, 35f))
+            using (var f = new Font(TextLayout.Family("Segoe UI"), 54f, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var tb = new SolidBrush(Color.FromArgb(70, 255, 255, 255)))
+            using (var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            {
+                g.FillRectangle(b, 0, 0, 192, 108);
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                g.DrawString(letter, f, tb, new RectangleF(0, 0, 192, 108), fmt);
+            }
+            return new MediaItem { Id = id, Kind = MediaKind.Image, Status = MediaStatus.Ready, Picture = bmp, Name = letter, Info = new MediaInfo { Width = 192, Height = 108, HasVideo = true, Fps = 30 } };
+        }
+
+        sealed class ThumbSource : IFrameSource
+        {
+            readonly Dictionary<int, Frame> kept = new Dictionary<int, Frame>();
+            public Frame Get(Clip c, MediaItem m, double t, Size size)
+            {
+                Frame f;
+                if (!kept.TryGetValue(m.Id, out f)) kept[m.Id] = f = SourceFilters.ImageFrame(m, c, size);
+                return f;
+            }
+            public void BeginFrame() { }
+            public void EndFrame() { }
+            public void Prepare(Clip c, MediaItem m, double t, Size size) { }
+            public void Dispose() { }
+        }
+
+        /// <summary>A transition's tile: the real thing, drawn by the compositor a little under half-way through.</summary>
         static void DrawTransitionSample(Graphics g, RectangleF r, string id)
         {
-            var a = Theme.Current.OverlayA; var b = Theme.Current.OverlayB;
-            using (var ba = new SolidBrush(a)) g.FillRectangle(ba, r);
-            float p = 0.5f;
-            var st = g.Save();
-            using (var bb = new SolidBrush(b))
+            int theme = Theme.Current.OverlayA.ToArgb() ^ (Theme.Current.OverlayB.ToArgb() * 31) ^ Theme.Current.Window.ToArgb();
+            Bitmap bmp;
+            lock (transitionThumbs)
             {
-                switch (id)
+                if (thumbA == null || theme != thumbTheme)
                 {
-                    case "dissolve": using (var bh = new SolidBrush(Color.FromArgb(128, b))) g.FillRectangle(bh, r); break;
-                    case "black": using (var bk = new LinearGradientBrush(r, a, Color.Black, 0f)) g.FillRectangle(bk, r.Left, r.Top, r.Width / 2, r.Height); using (var bk = new LinearGradientBrush(r, Color.Black, b, 0f)) g.FillRectangle(bk, r.Left + r.Width / 2, r.Top, r.Width / 2, r.Height); break;
-                    case "white": using (var bk = new LinearGradientBrush(r, a, Color.White, 0f)) g.FillRectangle(bk, r.Left, r.Top, r.Width / 2, r.Height); using (var bk = new LinearGradientBrush(r, Color.White, b, 0f)) g.FillRectangle(bk, r.Left + r.Width / 2, r.Top, r.Width / 2, r.Height); break;
-                    case "wipeleft": g.FillRectangle(bb, r.Left + r.Width * (1 - p), r.Top, r.Width * p, r.Height); break;
-                    case "wiperight": g.FillRectangle(bb, r.Left, r.Top, r.Width * p, r.Height); break;
-                    case "wipeup": g.FillRectangle(bb, r.Left, r.Top + r.Height * (1 - p), r.Width, r.Height * p); break;
-                    case "wipedown": g.FillRectangle(bb, r.Left, r.Top, r.Width, r.Height * p); break;
-                    case "slideleft": g.FillRectangle(bb, r.Left + r.Width * 0.45f, r.Top, r.Width, r.Height); using (var pen = new Pen(Color.White, 2)) g.DrawLine(pen, r.Left + r.Width * 0.45f, r.Top, r.Left + r.Width * 0.45f, r.Bottom); break;
-                    case "slideright": g.FillRectangle(bb, r.Left, r.Top, r.Width * 0.55f, r.Height); using (var pen = new Pen(Color.White, 2)) g.DrawLine(pen, r.Left + r.Width * 0.55f, r.Top, r.Left + r.Width * 0.55f, r.Bottom); break;
-                    case "slideup": g.FillRectangle(bb, r.Left, r.Top + r.Height * 0.45f, r.Width, r.Height); using (var pen = new Pen(Color.White, 2)) g.DrawLine(pen, r.Left, r.Top + r.Height * 0.45f, r.Right, r.Top + r.Height * 0.45f); break;
-                    case "slidedown": g.FillRectangle(bb, r.Left, r.Top, r.Width, r.Height * 0.55f); using (var pen = new Pen(Color.White, 2)) g.DrawLine(pen, r.Left, r.Top + r.Height * 0.55f, r.Right, r.Top + r.Height * 0.55f); break;
-                    case "circle": { float d = r.Height * 0.8f; g.SmoothingMode = SmoothingMode.AntiAlias; g.FillEllipse(bb, r.Left + (r.Width - d) / 2, r.Top + (r.Height - d) / 2, d, d); break; }
-                    case "zoom": { var zr = RectangleF.Inflate(r, -r.Width * 0.22f, -r.Height * 0.22f); g.FillRectangle(bb, zr); using (var pen = new Pen(Color.White, 1.5f)) g.DrawRectangle(pen, zr.X, zr.Y, zr.Width, zr.Height); break; }
+                    foreach (var old in transitionThumbs.Values) old.Dispose();
+                    transitionThumbs.Clear();
+                    var a = Theme.Current.OverlayA; var b = Theme.Current.OverlayB;
+                    thumbA = ThumbPicture(1, ControlPaint.Dark(a, 0.25f), a, "A");
+                    thumbB = ThumbPicture(2, b, ControlPaint.Light(b, 0.4f), "B");
+                    thumbTheme = theme;
+                }
+                if (!transitionThumbs.TryGetValue(id, out bmp))
+                {
+                    try
+                    {
+                        var p = new Project { Width = 192, Height = 108, Background = Color.Black.ToArgb() };
+                        p.Main.Clips.Add(new Clip { Id = 1, Kind = ClipKind.Image, MediaId = 1, Start = 0, Duration = 2 });
+                        p.Main.Clips.Add(new Clip { Id = 2, Kind = ClipKind.Image, MediaId = 2, Start = 2, Duration = 2, Transition = id, TransitionDuration = 1 });
+                        var comp = new Compositor(p, mid => mid == 1 ? thumbA : thumbB);
+                        var canvas = new Frame(192, 108);
+                        using (var src = new ThumbSource()) comp.Render(canvas, 1.94, src);
+                        bmp = canvas.ToBitmap();
+                    }
+                    catch { bmp = null; }
+                    transitionThumbs[id] = bmp;
                 }
             }
-            g.Restore(st);
+            if (bmp == null) { using (var ba = new SolidBrush(Theme.Current.OverlayA)) g.FillRectangle(ba, r); }
+            else
+            {
+                var st = g.Save();
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(bmp, r);
+                g.Restore(st);
+            }
             Icons.Draw(g, Ico.Transition, new RectangleF(r.Right - 22, r.Bottom - 22, 18, 18), Color.FromArgb(200, 255, 255, 255), 1.6f);
         }
 
@@ -2505,6 +2575,26 @@ namespace StillsAndReels
                 ClipSlider(c, "Shadow", 0, 1, 0, x => x.DropShadow, (x, v) => x.DropShadow = v, Pct);
             }
             Section("Animation");
+            bool isText = c.Kind == ClipKind.Text;
+            var anims = Looks.AnimIds.Where(a => isText || a != "type").ToList();
+            var inBtn = Btn("In: " + Looks.AnimName(c.AnimIn, false), Ico.ChevronRight, "How the clip arrives", () => { });
+            inBtn.AlignLeft = true;
+            inBtn.Click += (s, e) => ShowChoiceMenu(inBtn, anims.Select(a => new KeyValuePair<string, string>(a, Looks.AnimName(a, false))), c.AnimIn, v => SetClip(id, x => x.AnimIn = v, true));
+            P(inBtn);
+            if (!string.IsNullOrEmpty(c.AnimIn))
+                ClipSlider(c, "In length", 0.1, Math.Max(0.2, Math.Min(4, c.Duration / 2)), 0.5, x => x.AnimInTime > 0.001 ? x.AnimInTime : 0.5, (x, v) => x.AnimInTime = v, Sec);
+            var outBtn = Btn("Out: " + Looks.AnimName(c.AnimOut, true), Ico.ChevronLeft, "How the clip leaves", () => { });
+            outBtn.AlignLeft = true;
+            outBtn.Click += (s, e) => ShowChoiceMenu(outBtn, anims.Select(a => new KeyValuePair<string, string>(a, Looks.AnimName(a, true))), c.AnimOut, v => SetClip(id, x => x.AnimOut = v, true));
+            P(outBtn);
+            if (!string.IsNullOrEmpty(c.AnimOut))
+                ClipSlider(c, "Out length", 0.1, Math.Max(0.2, Math.Min(4, c.Duration / 2)), 0.5, x => x.AnimOutTime > 0.001 ? x.AnimOutTime : 0.5, (x, v) => x.AnimOutTime = v, Sec);
+            var moveBtn = Btn("Movement: " + Looks.MotionName(c.Motion), Ico.Sparkle, "Gentle movement for the whole length of the clip, such as a slow zoom on a photo", () => { });
+            moveBtn.AlignLeft = true;
+            moveBtn.Click += (s, e) => ShowChoiceMenu(moveBtn, Looks.MotionIds.Select(a => new KeyValuePair<string, string>(a, Looks.MotionName(a))), c.Motion, v => SetClip(id, x => x.Motion = v, true));
+            P(moveBtn);
+            if (!string.IsNullOrEmpty(c.Motion))
+                ClipSlider(c, "Movement strength", 0.2, 3, 1, x => x.MotionStrength, (x, v) => x.MotionAmount = v, Pct);
             ClipSlider(c, "Fade in", 0, Math.Min(5, c.Duration), 0, x => x.FadeIn, (x, v) => x.FadeIn = Math.Min(v, x.Duration), Sec);
             ClipSlider(c, "Fade out", 0, Math.Min(5, c.Duration), 0, x => x.FadeOut, (x, v) => x.FadeOut = Math.Min(v, x.Duration), Sec);
             Section("Transition in");
@@ -2528,6 +2618,8 @@ namespace StillsAndReels
             ClipSlider(c, "Contrast", -100, 100, 0, x => x.Contrast, (x, v) => x.Contrast = v, Signed);
             ClipSlider(c, "Saturation", -100, 100, 0, x => x.Saturation, (x, v) => x.Saturation = v, Signed);
             ClipSlider(c, "Exposure", -100, 100, 0, x => x.Exposure, (x, v) => x.Exposure = v, Signed);
+            ClipSlider(c, "Highlights", -100, 100, 0, x => x.Highlights, (x, v) => x.Highlights = v, Signed);
+            ClipSlider(c, "Shadows", -100, 100, 0, x => x.Shadows, (x, v) => x.Shadows = v, Signed);
             ClipSlider(c, "Temperature", -100, 100, 0, x => x.Temperature, (x, v) => x.Temperature = v, Signed);
             ClipSlider(c, "Tint", -100, 100, 0, x => x.Tint, (x, v) => x.Tint = v, Signed);
             ClipSlider(c, "Hue", -180, 180, 0, x => x.Hue, (x, v) => x.Hue = v, v => Math.Round(v) + "°");
@@ -2535,7 +2627,7 @@ namespace StillsAndReels
             {
                 var cc = project.FindClip(id); if (cc == null) return;
                 BeginChange(null);
-                cc.Brightness = cc.Contrast = cc.Saturation = cc.Exposure = cc.Temperature = cc.Tint = cc.Hue = 0;
+                cc.Brightness = cc.Contrast = cc.Saturation = cc.Exposure = cc.Temperature = cc.Tint = cc.Hue = cc.Highlights = cc.Shadows = 0;
                 cc.Filter = ""; cc.FilterAmount = 1;
                 propsFor = -2; Changed();
             })));
@@ -2549,6 +2641,16 @@ namespace StillsAndReels
             ClipSlider(c, "Sharpen", 0, 100, 0, x => x.Sharpen, (x, v) => x.Sharpen = v);
             ClipSlider(c, "Vignette", 0, 100, 0, x => x.Vignette, (x, v) => x.Vignette = v);
             ClipSlider(c, "Film grain", 0, 100, 0, x => x.Grain, (x, v) => x.Grain = v);
+            ClipSlider(c, "Glow", 0, 100, 0, x => x.Glow, (x, v) => x.Glow = v);
+            ClipSlider(c, "Pixelate", 0, 100, 0, x => x.Pixelate, (x, v) => x.Pixelate = v);
+            ClipSlider(c, "Colour fringes", 0, 100, 0, x => x.RgbSplit, (x, v) => x.RgbSplit = v);
+            Section("Mirror");
+            var mir = new Segmented();
+            mir.Add("0", "Off").Add("1", "Left").Add("2", "Right").Add("3", "Top").Add("4", "Bottom");
+            mir.Selected = (c.Mirror >= 1 && c.Mirror <= 4 ? c.Mirror : 0).ToString(CultureInfo.InvariantCulture);
+            mir.Picked += v => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.Mirror = int.Parse(v); Changed(); };
+            P(mir);
+            if (c.Mirror != 0) HintP("The chosen half is reflected onto the other half.");
             Section("Chroma key (green screen)");
             var key = new ThemedToggle { Text = "Remove a colour", Checked = c.ChromaKey };
             key.CheckedChanged += (s, e) => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.ChromaKey = key.Checked; propsFor = -2; Changed(); };
@@ -2690,6 +2792,7 @@ namespace StillsAndReels
             fontBtn.Click += (s, e) => ShowFontMenu(fontBtn, id);
             P(fontBtn);
             ClipSlider(c, "Size", 0.02, 0.3, 0.08, x => x.FontSize, (x, v) => x.FontSize = v, v => Math.Round(v * project.Height) + " px");
+            if (c.Text != null && c.Text.Contains("\n")) ClipSlider(c, "Line spacing", -0.4, 2, 0, x => x.LineSpacing, (x, v) => x.LineSpacing = v, v => (v >= 0 ? "+" : "") + Math.Round(v * 100) + "%");
             var bold = Btn("Bold", Ico.None, "Bold", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.Bold = !cc.Bold; propsFor = -2; Changed(); });
             bold.Checked = c.Bold; bold.Font = Theme.UiFont(10f, FontStyle.Bold);
             var italic = Btn("Italic", Ico.None, "Italic", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.Italic = !cc.Italic; propsFor = -2; Changed(); });
@@ -2705,6 +2808,10 @@ namespace StillsAndReels
             }
             Section("Colour");
             P(ColorRow(c.TextColor, col => { var cc = project.FindClip(id); if (cc != null) cc.TextColor = col; }));
+            var grad = new ThemedToggle { Text = "Blend into a second colour", Checked = c.TextColor2 != 0 };
+            grad.CheckedChanged += (s, e) => SetClip(id, x => x.TextColor2 = grad.Checked ? unchecked((int)0xFFFF5A3C) : 0, true);
+            P(grad);
+            if (c.TextColor2 != 0) P(ColorRow(c.TextColor2, col => { var cc = project.FindClip(id); if (cc != null) cc.TextColor2 = col; }));
             Section(c.TextStyle == "lower" ? "Accent" : c.TextStyle == "neon" ? "Glow" : "Outline");
             if (c.TextStyle != "lower" && c.TextStyle != "neon") ClipSlider(c, "Outline width", 0, 0.2, 0, x => x.OutlineWidth, (x, v) => x.OutlineWidth = v, Pct);
             P(ColorRow(c.OutlineColor, col => { var cc = project.FindClip(id); if (cc != null) cc.OutlineColor = col; }));
@@ -2748,6 +2855,34 @@ namespace StillsAndReels
             SetPlacement(cc, p);
             Changed();
             Say(fill ? "Clip fills the canvas" : "Clip fits inside the canvas");
+        }
+
+        /// <summary>Changes the clip with the given id as one undo step; rebuild = the panel shows different controls afterwards.</summary>
+        void SetClip(int clipId, Action<Clip> change, bool rebuild)
+        {
+            var cc = project.FindClip(clipId);
+            if (cc == null) return;
+            BeginChange(null);
+            change(cc);
+            if (rebuild) propsFor = -2;
+            Changed();
+        }
+
+        /// <summary>A menu of named choices with "None" first; current is ticked.</summary>
+        void ShowChoiceMenu(Control anchor, IEnumerable<KeyValuePair<string, string>> items, string current, Action<string> pick)
+        {
+            var menu = new ContextMenuStrip();
+            var none = new ToolStripMenuItem("None", null, (s, e) => pick("")) { Checked = string.IsNullOrEmpty(current) };
+            menu.Items.Add(none);
+            menu.Items.Add(new ToolStripSeparator());
+            foreach (var kv in items)
+            {
+                string id = kv.Key;
+                menu.Items.Add(new ToolStripMenuItem(kv.Value, null, (s, e) => pick(id)) { Checked = (current ?? "") == id });
+            }
+            Theme.StyleMenu(menu);
+            menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
+            Ui.ShowMenuBelow(menu, anchor);
         }
 
         void ShowBlendMenu(Control anchor, int clipId)

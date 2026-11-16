@@ -372,11 +372,74 @@ static class ComposeTest
         Check(bar[2] > 80 && bar[2] < 180 && Px(f, 160, 90)[2] > 190 && Px(f, 310, 5)[2] > 60, "a blurred background fills the bars, dimmer than the clip " + S(bar));
         p.Main.Clips.Clear();
 
+        // ---- effects
+        var fxc = new Clip { Id = 21, Kind = ClipKind.Image, MediaId = 1, Start = 0, Duration = 4 };
+        p.Main.Clips.Add(fxc);
+        var clean = Render(p, media, 1, 320, 180);
+        fxc.Mirror = 1;
+        f = Render(p, media, 1, 320, 180);
+        bool sym = true;
+        for (int x = 0; x < 160; x += 7) { var l = Px(f, x, 60); var r = Px(f, 319 - x, 60); if (Math.Abs(l[2] - r[2]) > 1 || Math.Abs(l[1] - r[1]) > 1) sym = false; }
+        Check(sym && Px(f, 10, 60)[2] == Px(clean, 10, 60)[2], "mirror reflects the left half onto the right");
+        fxc.Mirror = 0; fxc.Pixelate = 50;
+        f = Render(p, media, 1, 320, 180);
+        int same = 0, diff = 0;
+        for (int x = 0; x < 319; x++) { if (Px(f, x, 60)[2] == Px(f, x + 1, 60)[2]) same++; else diff++; }
+        Check(diff > 5 && diff < 60 && same > 250, "pixelate turns the picture into blocks (" + diff + " steps across)");
+        fxc.Pixelate = 0; fxc.RgbSplit = 60;
+        f = Render(p, media, 1, 320, 180);
+        Check(Px(f, 160, 90)[2] > Px(clean, 160, 90)[2] && Px(f, 160, 90)[1] == Px(clean, 160, 90)[1], "colour fringes move red and leave green alone");
+        fxc.RgbSplit = 0; fxc.Glow = 80;
+        f = Render(p, media, 1, 320, 180);
+        Check(Px(f, 300, 170)[2] >= Px(clean, 300, 170)[2] && Px(f, 300, 170)[1] > Px(clean, 300, 170)[1], "glow brightens around the bright parts");
+        fxc.Glow = 0; fxc.Shadows = 100;
+        f = Render(p, media, 1, 320, 180);
+        Check(Px(f, 30, 30)[2] > Px(clean, 30, 30)[2] + 5, "raising shadows lifts the dark part");
+        fxc.Shadows = 0;
+        var curve = Pixels.ToneCurve(-100, 100);
+        bool rising = curve[0] == 0 && curve[255] == 255;
+        for (int i = 1; i < 256; i++) if (curve[i] < curve[i - 1]) rising = false;
+        Check(rising && Pixels.ToneCurve(0, 0) == null, "the tone curve keeps black and white and never folds back");
+        bool looksOk = true;
+        foreach (var id in Looks.FilterIds) { fxc.Filter = id; try { Render(p, media, 1, 320, 180, false); } catch { looksOk = false; } if (Looks.FilterName(id) == "None") looksOk = false; }
+        foreach (var id in Looks.TransitionIds) if (Looks.TransitionName(id) == "None") looksOk = false;
+        Check(looksOk, "every look draws and every look and transition has a name (" + Looks.FilterIds.Length + " looks)");
+        fxc.Filter = "";
+
+        // ---- movement and arriving/leaving
+        fxc.Scale = 0.5;
+        fxc.Motion = "zoomin";
+        Check(Math.Abs(fxc.ShownAt(0).Scale - 0.5) < 1e-9 && fxc.ShownAt(4).Scale > 0.58 && Math.Abs(fxc.PlacementAt(4).Scale - 0.5) < 1e-9, "slow zoom grows the clip over its length without changing its own size");
+        fxc.Motion = "panleft";
+        Check(fxc.ShownAt(0.01).X > 0 && fxc.ShownAt(3.99).X < 0, "pan left moves the clip from right to left");
+        fxc.Motion = ""; fxc.AnimIn = "fade"; fxc.AnimInTime = 1; fxc.AnimOut = "slideup"; fxc.AnimOutTime = 1;
+        Check(Math.Abs(fxc.ShownAt(0.5).Opacity - 0.5) < 0.01 && fxc.ShownAt(2).Opacity == 1 && fxc.ShownAt(2).Y == 0 && fxc.ShownAt(3.9).Y > 0.05, "a clip fades in, rests, then slides away");
+        foreach (var id in Looks.AnimIds)
+        {
+            fxc.AnimIn = id; fxc.AnimOut = id;
+            var rest = fxc.ShownAt(2);
+            if (rest.Opacity != 1 || rest.X != 0 || rest.Y != 0 || Math.Abs(rest.Scale - 0.5) > 1e-9 || rest.Rotation != 0) Check(false, "animation " + id + " leaves the clip alone between arriving and leaving");
+            for (double tt = 0; tt <= 4; tt += 0.05) { var q = fxc.ShownAt(tt); if (double.IsNaN(q.X + q.Y + q.Scale + q.Rotation + q.Opacity) || q.Scale <= 0) Check(false, "animation " + id + " gives a sound placement at " + tt); }
+        }
+        foreach (var id in Looks.MotionIds) { fxc.Motion = id; try { Render(p, media, 1.3, 320, 180, false); } catch { Check(false, "movement " + id + " draws"); } }
+        Check(true, "every arriving, leaving and movement style runs (" + Looks.AnimIds.Length + " + " + Looks.MotionIds.Length + ")");
+        p.Main.Clips.Clear();
+        var typed = VideoEditorView.TextPreset("title");
+        typed.Id = 22; typed.Start = 0; typed.Duration = 4; typed.Text = "ABCDEFGH"; typed.Shadow = false; typed.AnimIn = "type"; typed.AnimInTime = 2;
+        p.Main.Clips.Add(typed);
+        var whole = Lit(Render(p, media, 3, 640, 360));
+        var part = Lit(Render(p, media, 1, 640, 360));
+        Check(part.Width > whole.Width * 0.3 && part.Width < whole.Width * 0.7 && Math.Abs(part.Left - whole.Left) <= 2 && Lit(Render(p, media, 0.01, 640, 360)).IsEmpty,
+            "typewriter text appears letter by letter from where the whole text starts (" + part.Width + " of " + whole.Width + ")");
+        p.Main.Clips.Clear();
+
         // ---- a project saved by 2.6 opens and draws; what 3.0 adds is off in it
         var old26 = Project.Load("tests/fixtures/project-2.6.srproj");
         bool plain = true;
         foreach (var oc26 in old26.AllClips())
             if (oc26.Blend != "" || oc26.HasMask || oc26.BackFill != 0 || oc26.Corner != 0 || oc26.BorderWidth != 0 || oc26.DropShadow != 0) plain = false;
+        foreach (var oc26 in old26.AllClips())
+            if (oc26.Motion != "" || oc26.AnimIn != "" || oc26.AnimOut != "" || oc26.Pixelate != 0 || oc26.Glow != 0 || oc26.RgbSplit != 0 || oc26.Mirror != 0 || oc26.Highlights != 0 || oc26.Shadows != 0 || oc26.TextColor2 != 0 || oc26.LineSpacing != 0 || oc26.IsAnimated != oc26.HasKeys) plain = false;
         Check(old26.ClipCount == 5 && old26.Width == 1280 && Math.Abs(old26.Fps - 25) < 0.01 && plain, "a 2.6 project loads with every new setting off");
         var first = old26.Main.Clips[0];
         Check(first.Keys.Count == 2 && Math.Abs(first.Speed - 1) < 1e-9 && first.Filter == "warm" && Math.Abs(first.Volume - 0.8) < 1e-9 && first.FlipH, "and keeps its own settings");
@@ -443,8 +506,9 @@ static class ComposeTest
                 var b = new Clip { Id = 2, Kind = ClipKind.Image, MediaId = 2, Start = 0, Duration = 4, Scale = 0.5 };
                 p.Main.Clips.Add(a);
                 var tr = new Track { Id = 9, Kind = TrackKind.Video }; tr.Clips.Add(b); p.Tracks.Add(tr);
+                sceneTime = 2;
                 scenes[i].Value(p, a, b);
-                var f = Render(p, media, 2, tw, th);
+                var f = Render(p, media, sceneTime, tw, th);
                 int x = pad + (i % cols) * (tw + pad), y = pad + (i / cols) * (th + pad + label);
                 using (var bmp = f.ToBitmap()) g.DrawImageUnscaled(bmp, x, y);
                 g.DrawString(scenes[i].Key, font, Brushes.White, x, y + th + 1);
@@ -453,6 +517,8 @@ static class ComposeTest
         }
         Console.WriteLine(scenes.Count + " scenes written to " + System.IO.Path.Combine(dir, "sheet.png"));
     }
+
+    static double sceneTime;
 
     static void DumpScenes()
     {
@@ -468,6 +534,39 @@ static class ComposeTest
         Scene("difference", (p, a, b) => { b.Blend = "difference"; b.Scale = 0.8; });
         Scene("tall clip, black bars", (p, a, b) => { a.MediaId = 3; b.Scale = 0.01; });
         Scene("tall clip, blurred background", (p, a, b) => { a.MediaId = 3; a.BackFill = 1; b.Scale = 0.01; });
+        foreach (var id in Looks.TransitionIds)
+        {
+            string tid = id;
+            Scene("transition: " + Looks.TransitionName(tid), (p, a, b) =>
+            {
+                p.Tracks.RemoveAt(1);
+                a.Duration = 2;
+                p.Main.Clips.Add(new Clip { Id = 3, Kind = ClipKind.Image, MediaId = 2, Start = 2, Duration = 2, Transition = tid, TransitionDuration = 1 });
+                sceneTime = 1.93;
+            });
+        }
+        foreach (var id in new[] { "tealorange", "golden", "sunset", "arctic", "forest", "rose", "pastel", "matte", "bleach", "punch", "technicolor", "night" })
+        {
+            string fid = id;
+            Scene("look: " + Looks.FilterName(fid), (p, a, b) => { a.Filter = fid; b.Filter = fid; });
+        }
+        Scene("pixelate 40", (p, a, b) => { a.Pixelate = 40; b.Pixelate = 40; });
+        Scene("glow 70", (p, a, b) => { a.Glow = 70; b.Glow = 70; });
+        Scene("rgb split 60", (p, a, b) => { a.RgbSplit = 60; b.RgbSplit = 60; });
+        Scene("mirror left", (p, a, b) => { a.Mirror = 1; b.Mirror = 3; });
+        Scene("shadows +80, highlights -60", (p, a, b) => { a.Shadows = 80; a.Highlights = -60; b.Scale = 0.01; });
+        Action<Project, string, Action<Clip>> title = (p, words, set) =>
+        {
+            var t = VideoEditorView.TextPreset("title"); t.Id = 30; t.Start = 0; t.Duration = 4; t.Text = words; set(t);
+            var tr = new Track { Id = 31, Kind = TrackKind.Video }; tr.Clips.Add(t); p.Tracks.Add(tr);
+        };
+        Scene("text: gradient", (p, a, b) => { b.Scale = 0.01; title(p, "Gradient", t => { t.TextColor2 = Color.FromArgb(255, 255, 120, 30).ToArgb(); t.TextColor = Color.FromArgb(255, 255, 240, 80).ToArgb(); }); });
+        Scene("text: typewriter 40%", (p, a, b) => { b.Scale = 0.01; title(p, "Typewriter\nsecond line", t => { t.AnimIn = "type"; t.AnimInTime = 2; t.FontSize = 0.09; }); sceneTime = 0.8; });
+        Scene("text: pop arriving", (p, a, b) => { b.Scale = 0.01; title(p, "Pop!", t => { t.AnimIn = "pop"; t.AnimInTime = 1; }); sceneTime = 0.25; });
+        Scene("text: slide up arriving", (p, a, b) => { b.Scale = 0.01; title(p, "Slide up", t => { t.AnimIn = "slideup"; t.AnimInTime = 1; }); sceneTime = 0.2; });
+        Scene("text: line spacing +1", (p, a, b) => { b.Scale = 0.01; title(p, "Line one\nLine two", t => { t.LineSpacing = 1; t.FontSize = 0.08; }); });
+        Scene("motion: zoom in (end)", (p, a, b) => { a.Motion = "zoomin"; b.Motion = "spin"; sceneTime = 3.9; });
+        Scene("motion: pan left (start)", (p, a, b) => { a.Motion = "panleft"; b.Motion = "swing"; sceneTime = 0.6; });
     }
 
     /// <summary>Bounding box of everything brighter than the black background.</summary>

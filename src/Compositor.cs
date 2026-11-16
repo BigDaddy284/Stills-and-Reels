@@ -117,6 +117,18 @@ namespace StillsAndReels
                 case "cinematic": return Mul(M(1.08, 0, -0.04, 0, -0.02, 1.0, 0.04, 0.01, -0.06, 0.04, 1.06, 0.03), Mul(ContrastM(1.15), Saturation(0.85)));
                 case "dramatic": return Mul(ContrastM(1.35), Saturation(0.65));
                 case "invert": return M(-1, 0, 0, 1, 0, -1, 0, 1, 0, 0, -1, 1);
+                case "tealorange": return Mul(M(1.12, 0.06, -0.12, 0, -0.03, 1.0, 0.03, 0, -0.14, 0.10, 1.02, 0.02), Mul(ContrastM(1.1), Saturation(1.05)));
+                case "golden": return Mul(Offset(0.02), Mul(ContrastM(1.05), Mul(Gain(1.14, 1.04, 0.80), Saturation(1.08))));
+                case "sunset": return Mul(Offset(0.02), Mul(Gain(1.26, 0.97, 0.70), Saturation(1.2)));
+                case "arctic": return Mul(ContrastM(1.08), Mul(Gain(0.84, 1.0, 1.24), Saturation(0.7)));
+                case "forest": return Mul(M(0.94, 0.06, 0, 0, 0.02, 1.08, 0, 0, 0, 0.06, 0.88, 0), Saturation(1.1));
+                case "rose": return Mul(Offset(0.03), Mul(Gain(1.12, 0.93, 1.0), Saturation(0.9)));
+                case "pastel": return Mul(Offset(0.1), Mul(ContrastM(0.76), Saturation(0.8)));
+                case "matte": return Mul(Offset(0.08), Mul(ContrastM(0.88), Saturation(0.9)));
+                case "bleach": return Mul(ContrastM(1.3), Saturation(0.45));
+                case "punch": return Mul(ContrastM(1.25), Saturation(1.25));
+                case "technicolor": return M(1.3, -0.15, -0.15, 0, -0.15, 1.3, -0.15, 0, -0.15, -0.15, 1.3, 0);
+                case "night": return Mul(ContrastM(1.1), Mul(Gain(0.58, 0.74, 1.1), Saturation(0.6)));
                 default: return Identity();
             }
         }
@@ -149,7 +161,28 @@ namespace StillsAndReels
         public static void ApplyMatrix(BitmapData d, double[] m) { ApplyMatrix(d.Scan0, d.Scan0, d.Width, d.Height, d.Stride, d.Stride, m); }
 
         /// <summary>Applies a colour matrix, reading from one buffer and writing to another (or the same one).</summary>
-        public static void ApplyMatrix(IntPtr src, IntPtr dst, int w, int h, int srcStride, int dstStride, double[] m)
+        public static void ApplyMatrix(IntPtr src, IntPtr dst, int w, int h, int srcStride, int dstStride, double[] m) { ApplyMatrix(src, dst, w, h, srcStride, dstStride, m, null); }
+
+        /// <summary>
+        /// A brightness curve that lifts or lowers the dark half (shadows) and the bright half (highlights) while
+        /// leaving black and white where they are. Null when both are zero.
+        /// </summary>
+        public static byte[] ToneCurve(double shadows, double highlights)
+        {
+            if (Math.Abs(shadows) < 0.01 && Math.Abs(highlights) < 0.01) return null;
+            double sh = Math.Max(-1, Math.Min(1, shadows / 100.0)) * 0.22, hi = Math.Max(-1, Math.Min(1, highlights / 100.0)) * 0.22;
+            var lut = new byte[256];
+            for (int i = 0; i < 256; i++)
+            {
+                double x = i / 255.0, bump = 4 * x * (1 - x);
+                double y = x + sh * bump * (1 - x) + hi * bump * x;
+                lut[i] = (byte)Math.Max(0, Math.Min(255, Math.Round(y * 255)));
+            }
+            return lut;
+        }
+
+        /// <summary>The same, followed by a brightness curve (see ToneCurve) when one is given.</summary>
+        public static void ApplyMatrix(IntPtr src, IntPtr dst, int w, int h, int srcStride, int dstStride, double[] m, byte[] curve)
         {
             // fixed point: coefficients × 1024, offsets in 0..255 × 1024
             int r0 = (int)(m[0] * 1024), r1 = (int)(m[1] * 1024), r2 = (int)(m[2] * 1024), r3 = (int)(m[3] * 255 * 1024);
@@ -171,6 +204,12 @@ namespace StillsAndReels
                         p[1] = (byte)(ng < 0 ? 0 : ng > 255 ? 255 : ng);
                         p[0] = (byte)(nb < 0 ? 0 : nb > 255 ? 255 : nb);
                         p[3] = s[3];
+                    }
+                    if (curve != null)
+                    {
+                        p = (byte*)dst + (long)y * dstStride;
+                        fixed (byte* lut = curve)
+                            for (int x = 0; x < w; x++, p += 4) { p[0] = lut[p[0]]; p[1] = lut[p[1]]; p[2] = lut[p[2]]; }
                     }
                 }
             });
@@ -388,6 +427,141 @@ namespace StillsAndReels
             });
         }
 
+        /// <summary>Mosaic: every block of pixels takes the colour of its middle.</summary>
+        public static void Pixelate(IntPtr scan0, int w, int h, int stride, int block)
+        {
+            if (block < 2) return;
+            int rows = (h + block - 1) / block;
+            // blocks are centred on the picture so the pattern stays put when the clip is cropped evenly
+            int ox = -((block - w % block) % block) / 2, oy = -((block - h % block) % block) / 2;
+            rows = (h - oy + block - 1) / block;
+            Raster.Rows(0, rows, (long)w * h, (ra, rb) =>
+            {
+                for (int r = ra; r < rb; r++)
+                {
+                    int y0 = Math.Max(0, oy + r * block), y1 = Math.Min(h, oy + (r + 1) * block);
+                    if (y1 <= y0) continue;
+                    int cy = Math.Min(h - 1, Math.Max(0, oy + r * block + block / 2));
+                    byte* srow = (byte*)scan0 + (long)cy * stride;
+                    byte* first = (byte*)scan0 + (long)y0 * stride;
+                    for (int x0 = ox; x0 < w; x0 += block)
+                    {
+                        int xa = Math.Max(0, x0), xb = Math.Min(w, x0 + block);
+                        uint v = *(uint*)(srow + Math.Min(w - 1, Math.Max(0, x0 + block / 2)) * 4);
+                        uint* o = (uint*)(first + xa * 4);
+                        for (int x = xa; x < xb; x++) *o++ = v;
+                    }
+                    for (int y = y0 + 1; y < y1; y++) Buffer.MemoryCopy(first, (byte*)scan0 + (long)y * stride, (long)w * 4, (long)w * 4);
+                }
+            });
+        }
+
+        /// <summary>Copies one half of the picture onto the other, reversed. mode: 1 left to right, 2 right to left, 3 top to bottom, 4 bottom to top.</summary>
+        public static void Mirror(IntPtr scan0, int w, int h, int stride, int mode)
+        {
+            if (mode == 1 || mode == 2)
+            {
+                Raster.Rows(0, h, (long)w * h / 2, (ya, yb) =>
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        uint* row = (uint*)((byte*)scan0 + (long)y * stride);
+                        if (mode == 1) for (int x = 0; x < w / 2; x++) row[w - 1 - x] = row[x];
+                        else for (int x = 0; x < w / 2; x++) row[x] = row[w - 1 - x];
+                    }
+                });
+            }
+            else if (mode == 3 || mode == 4)
+            {
+                Raster.Rows(0, h / 2, (long)w * h / 2, (ya, yb) =>
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        byte* a = (byte*)scan0 + (long)y * stride, b = (byte*)scan0 + (long)(h - 1 - y) * stride;
+                        if (mode == 3) Buffer.MemoryCopy(a, b, (long)w * 4, (long)w * 4);
+                        else Buffer.MemoryCopy(b, a, (long)w * 4, (long)w * 4);
+                    }
+                });
+            }
+        }
+
+        /// <summary>Pulls red one way and blue the other by shift pixels (colour fringes, as on a worn tape or a cheap lens).</summary>
+        public static void RgbSplit(IntPtr scan0, int w, int h, int stride, int shift)
+        {
+            if (shift < 1 || w < 4) return;
+            var copy = Raster.Rent((long)stride * h);
+            Marshal.Copy(scan0, copy, 0, stride * h);
+            Raster.Rows(0, h, (long)w * h, (ya, yb) =>
+            {
+                fixed (byte* src = copy)
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        byte* s = src + (long)y * stride, o = (byte*)scan0 + (long)y * stride;
+                        for (int x = 0; x < w; x++, o += 4)
+                        {
+                            int xr = x + shift, xb = x - shift;
+                            if (xr >= w) xr = w - 1;
+                            if (xb < 0) xb = 0;
+                            o[2] = s[xr * 4 + 2];
+                            o[0] = s[xb * 4];
+                        }
+                    }
+                }
+            });
+            Raster.Return(copy);
+        }
+
+        /// <summary>Soft light spreading from the bright parts of the picture.</summary>
+        public static void Glow(IntPtr scan0, int w, int h, int stride, double amount)
+        {
+            if (amount <= 0.5 || w < 32 || h < 32 || stride != w * 4) return;
+            // the glow itself is a blurred quarter-size copy of what is bright
+            var full = new Frame(w, h, Raster.Rent((long)w * h * 4));
+            fixed (byte* fp = full.Data) Buffer.MemoryCopy((void*)scan0, fp, (long)w * h * 4, (long)w * h * 4);
+            var half = new Frame((w + 1) / 2, (h + 1) / 2, Raster.Rent((long)((w + 1) / 2) * ((h + 1) / 2) * 4));
+            Raster.Halve(full, half);
+            var quarter = new Frame((half.Width + 1) / 2, (half.Height + 1) / 2, Raster.Rent((long)((half.Width + 1) / 2) * ((half.Height + 1) / 2) * 4));
+            Raster.Halve(half, quarter);
+            Raster.Return(half.Data);
+            int qw = quarter.Width, qh = quarter.Height;
+            fixed (byte* q = quarter.Data)
+            {
+                byte* p = q, end = q + (long)qw * qh * 4;
+                for (; p < end; p += 4)
+                {
+                    // keep only what is brighter than mid-grey, stretched back to the full range
+                    int b = p[0] * 2 - 255, g = p[1] * 2 - 255, r = p[2] * 2 - 255;
+                    p[0] = (byte)(b < 0 ? 0 : b); p[1] = (byte)(g < 0 ? 0 : g); p[2] = (byte)(r < 0 ? 0 : r);
+                }
+                BoxBlur(q, qw, qh, qw * 4, Math.Max(2, Math.Max(qw, qh) / 40));
+            }
+            fixed (byte* fp = full.Data)
+            {
+                byte* glow = fp;
+                Raster.Stretch(quarter, glow, w, h);
+                int k = (int)(Math.Min(100, amount) / 100.0 * 300);
+                Raster.Rows(0, h, (long)w * h, (ya, yb) =>
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        byte* o = (byte*)scan0 + (long)y * stride, gl = glow + (long)y * w * 4;
+                        for (int x = 0; x < w; x++, o += 4, gl += 4)
+                        {
+                            // screen: brightens without ever clipping harshly
+                            int gb = (gl[0] * k) >> 8, gg = (gl[1] * k) >> 8, gr = (gl[2] * k) >> 8;
+                            if (gb > 255) gb = 255; if (gg > 255) gg = 255; if (gr > 255) gr = 255;
+                            o[0] = (byte)(255 - (((255 - o[0]) * (255 - gb) + 127) / 255));
+                            o[1] = (byte)(255 - (((255 - o[1]) * (255 - gg) + 127) / 255));
+                            o[2] = (byte)(255 - (((255 - o[2]) * (255 - gr) + 127) / 255));
+                        }
+                    }
+                });
+            }
+            Raster.Return(quarter.Data);
+            Raster.Return(full.Data);
+        }
+
         /// <summary>Blurs an opaque frame in place and dims it (gain below 1).</summary>
         public static void Soften(Frame f, int radius, double gain)
         {
@@ -403,7 +577,8 @@ namespace StillsAndReels
         /// <summary>True when the clip needs a per-pixel pass before it is drawn.</summary>
         public static bool NeedsPass(Clip c)
         {
-            return c.HasColorWork || c.ChromaKey || c.Blur > 0.5 || c.Sharpen > 0.5 || c.Vignette > 0.5 || c.Grain > 0.5;
+            return c.HasColorWork || c.ChromaKey || c.Blur > 0.5 || c.Sharpen > 0.5 || c.Vignette > 0.5 || c.Grain > 0.5 ||
+                   c.Pixelate > 0.5 || c.Glow > 0.5 || c.RgbSplit > 0.5 || (c.Mirror >= 1 && c.Mirror <= 4);
         }
 
         /// <summary>
@@ -416,13 +591,17 @@ namespace StillsAndReels
             fixed (byte* s = src.Data) fixed (byte* d = dst.Data)
             {
                 IntPtr sp = (IntPtr)s, dp = (IntPtr)d;
-                if (c.HasColorWork) ApplyMatrix(sp, dp, w, h, stride, stride, ClipMatrix(c));
+                if (c.HasColorWork) ApplyMatrix(sp, dp, w, h, stride, stride, ClipMatrix(c), ToneCurve(c.Shadows, c.Highlights));
                 else Buffer.MemoryCopy(s, d, dst.Data.Length, (long)stride * h);
                 dst.Opaque = src.Opaque;
                 dst.Premultiplied = src.Opaque;
                 if (c.ChromaKey) { ChromaKey(dp, w, h, stride, Color.FromArgb(c.KeyColor), c.KeySimilarity, c.KeySmoothness); dst.Opaque = false; dst.Premultiplied = false; }
+                if (c.Mirror >= 1 && c.Mirror <= 4) Mirror(dp, w, h, stride, c.Mirror);
+                if (c.Pixelate > 0.5) Pixelate(dp, w, h, stride, Math.Max(2, (int)Math.Round(Math.Min(100, c.Pixelate) / 100.0 * Math.Max(w, h) / 16.0)));
                 if (c.Blur > 0.5) Blur(dp, w, h, stride, Math.Max(1, (int)Math.Round(c.Blur / 100.0 * Math.Max(w, h) / 45.0)));
                 if (c.Sharpen > 0.5) Sharpen(dp, w, h, stride, c.Sharpen);
+                if (c.RgbSplit > 0.5) RgbSplit(dp, w, h, stride, Math.Max(1, (int)Math.Round(Math.Min(100, c.RgbSplit) / 100.0 * Math.Max(w, h) / 60.0)));
+                if (c.Glow > 0.5) Glow(dp, w, h, stride, c.Glow);
                 if (c.Vignette > 0.5) Vignette(dp, w, h, stride, c.Vignette);
                 if (c.Grain > 0.5) Grain(dp, w, h, stride, c.Grain, frameIndex);
             }
@@ -971,22 +1150,39 @@ namespace StillsAndReels
             float y = 0;
             var lineBounds = new List<RectangleF>();
             var linePaths = new List<GraphicsPath>();
+            var shownPaths = new List<GraphicsPath>();
             float maxW = 0;
+            // a typewriter animation shows only the first letters, laid out where the whole text will stand
+            int lettersLeft = c.RevealChars == 0 ? int.MaxValue : Math.Max(0, c.RevealChars);
+            float gap = (float)(1.22 + Math.Max(-0.6, Math.Min(3, c.LineSpacing)));
             for (int i = 0; i < lines.Length; i++)
             {
                 float size = em * (lower && i > 0 ? 0.62f : 1f);
                 bool bold = lower ? i == 0 || c.Bold : c.Bold;
-                var lp = new GraphicsPath();
                 string line = lines[i].Length == 0 ? " " : lines[i];
-                try { lp.AddString(line, fam, (int)Style(fam, bold, c.Italic), size, new PointF(0, y), fmt); }
-                catch { using (var ff = new FontFamily(System.Drawing.Text.GenericFontFamilies.SansSerif)) lp.AddString(line, ff, (int)FontStyle.Regular, size, new PointF(0, y), fmt); }
+                Func<string, GraphicsPath> make = str =>
+                {
+                    var gp = new GraphicsPath();
+                    try { gp.AddString(str, fam, (int)Style(fam, bold, c.Italic), size, new PointF(0, y), fmt); }
+                    catch { using (var ff = new FontFamily(System.Drawing.Text.GenericFontFamilies.SansSerif)) gp.AddString(str, ff, (int)FontStyle.Regular, size, new PointF(0, y), fmt); }
+                    return gp;
+                };
+                var lp = make(line);
+                GraphicsPath shown = lp;
+                if (lettersLeft != int.MaxValue)
+                {
+                    int take = 0;
+                    while (take < line.Length && (lettersLeft > 0 || char.IsWhiteSpace(line[take]))) { if (!char.IsWhiteSpace(line[take])) lettersLeft--; take++; }
+                    if (take < line.Length) shown = take == 0 ? new GraphicsPath() : make(line.Substring(0, take));
+                }
                 var b = lp.GetBounds();
                 if (lines[i].Trim().Length == 0) b = new RectangleF(0, y, size * 0.3f, size);
                 float w = b.Width;
                 lineBounds.Add(new RectangleF(0, y, w, size * 1.18f));
                 linePaths.Add(lp);
+                shownPaths.Add(shown);
                 maxW = Math.Max(maxW, w);
-                y += size * 1.22f;
+                y += size * (i == lines.Length - 1 ? 1.22f : gap);
             }
             float totalH = y - (lines.Length > 0 ? 0.04f * em : 0);
             int align = lower ? 0 : c.Align;
@@ -997,8 +1193,13 @@ namespace StillsAndReels
                 float lineW = lineBounds[i].Width;
                 float dx = align == 0 ? 0 : align == 2 ? maxW - lineW : (maxW - lineW) / 2;
                 dx -= (b.Width > 0 && lines[i].Trim().Length > 0 ? b.Left : 0);
-                using (var m = new Matrix()) { m.Translate(dx - maxW / 2, -totalH / 2); lp.Transform(m); }
-                path.AddPath(lp, false);
+                var sp = shownPaths[i];
+                if (sp.PointCount > 0)
+                {
+                    using (var m = new Matrix()) { m.Translate(dx - maxW / 2, -totalH / 2); sp.Transform(m); }
+                    path.AddPath(sp, false);
+                }
+                if (!ReferenceEquals(sp, lp)) sp.Dispose();
                 lp.Dispose();
             }
             box = new RectangleF(-maxW / 2, -totalH / 2, maxW, totalH);
@@ -1039,7 +1240,7 @@ namespace StillsAndReels
                             g.FillRectangle(b, bar);
                     }
                 }
-                if (c.TextStyle == "neon")
+                if (c.TextStyle == "neon" && path.PointCount > 0)
                 {
                     float[] widths = { 0.30f, 0.18f, 0.09f };
                     int[] alphas = { 35, 60, 110 };
@@ -1047,7 +1248,7 @@ namespace StillsAndReels
                         using (var pen = new Pen(Color.FromArgb(A(alphas[i]), outline.R, outline.G, outline.B), em * widths[i]) { LineJoin = LineJoin.Round })
                             g.DrawPath(pen, path);
                 }
-                if (c.Shadow)
+                if (c.Shadow && path.PointCount > 0)
                 {
                     using (var m = new Matrix())
                     using (var sp = (GraphicsPath)path.Clone())
@@ -1057,10 +1258,20 @@ namespace StillsAndReels
                         using (var b = new SolidBrush(Color.FromArgb(A(150), 0, 0, 0))) g.FillPath(b, sp);
                     }
                 }
-                if (c.OutlineWidth > 0.001 && c.TextStyle != "lower")
+                if (c.OutlineWidth > 0.001 && c.TextStyle != "lower" && path.PointCount > 0)
                     using (var pen = new Pen(Color.FromArgb(A(255), outline.R, outline.G, outline.B), (float)(c.OutlineWidth * em * 2)) { LineJoin = LineJoin.Round })
                         g.DrawPath(pen, path);
-                using (var b = new SolidBrush(Color.FromArgb(A(textColor.A), textColor.R, textColor.G, textColor.B))) g.FillPath(b, path);
+                if (path.PointCount > 0)
+                {
+                    if (c.TextColor2 != 0 && box.Height > 1)
+                    {
+                        var second = Color.FromArgb(c.TextColor2);
+                        var span = new RectangleF(box.Left, box.Top - 1, Math.Max(1, box.Width), box.Height + 2);
+                        using (var b = new LinearGradientBrush(span, Color.FromArgb(A(textColor.A), textColor.R, textColor.G, textColor.B), Color.FromArgb(A(255), second.R, second.G, second.B), 90f))
+                            g.FillPath(b, path);
+                    }
+                    else using (var b = new SolidBrush(Color.FromArgb(A(textColor.A), textColor.R, textColor.G, textColor.B))) g.FillPath(b, path);
+                }
                 g.Restore(st);
             }
         }
@@ -1090,6 +1301,7 @@ namespace StillsAndReels
                 c.Text ?? "", c.Font ?? "", c.FontSize.ToString("R", inv), c.TextColor.ToString(inv), c.Bold ? "b" : "", c.Italic ? "i" : "",
                 c.Align.ToString(inv), c.OutlineColor.ToString(inv), c.OutlineWidth.ToString("R", inv), c.Shadow ? "s" : "",
                 c.BoxColor.ToString(inv), c.BoxOpacity.ToString("R", inv), c.TextStyle ?? "", canvasH.ToString("R", inv),
+                c.TextColor2.ToString(inv), c.LineSpacing.ToString("R", inv), c.RevealChars.ToString(inv),
             });
         }
 
@@ -1267,7 +1479,7 @@ namespace StillsAndReels
         public PointF[] Outline(Clip c, double t, float cw, float ch)
         {
             if (!c.IsVisual) return null;
-            var p = c.PlacementAt(t);
+            var p = c.ShownAt(t);
             RectangleF r;
             if (c.Kind == ClipKind.Text)
             {
@@ -1351,7 +1563,7 @@ namespace StillsAndReels
                     Active(tr, t, out a, out b, out p, out tx);
                     if (b == null)
                     {
-                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                        if (a != null) DrawClip(canvas, a, t, src, null);
                         continue;
                     }
                     DrawTransition(canvas, a, b, t, p, tx, src);
@@ -1383,11 +1595,27 @@ namespace StillsAndReels
             Raster.Draw(canvas, new Layer { Src = one, A = canvas.Width, D = canvas.Height, Opacity = Math.Min(1, k) });
         }
 
+        /// <summary>What a transition does to a clip while it runs.</summary>
+        internal sealed class Fx
+        {
+            public double Opacity = 1;
+            public PointF Offset;
+            public float Scale = 1f, Rotation;
+            public double Blur, Pixelate, Split;    // added to the clip's own effects
+            public Layer Like;                      // a clip rectangle or shape (only HasClip, Clip and Alpha are read)
+        }
+
         void DrawTransition(Frame canvas, Clip a, Clip b, double t, double p, string kind, IFrameSource src)
         {
             float cw = canvas.Width, ch = canvas.Height;
             p = Math.Max(0, Math.Min(1, p));
             double e = p * p * (3 - 2 * p);
+            double mx = cw / 2.0, my = ch / 2.0;
+            Action<RowAlpha> shaped = shape =>
+            {
+                if (a != null) DrawClip(canvas, a, t, src, null);
+                DrawClip(canvas, b, t, src, new Fx { Like = new Layer { Alpha = shape } });
+            };
             switch (kind)
             {
                 case "black":
@@ -1397,13 +1625,12 @@ namespace StillsAndReels
                         double k;
                         if (a != null)
                         {
-                            if (p < 0.5) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
-                            else DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, null);
+                            DrawClip(canvas, p < 0.5 ? a : b, t, src, null);
                             k = p < 0.5 ? p * 2 : (1 - p) * 2;
                         }
                         else
                         {
-                            DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, null);
+                            DrawClip(canvas, b, t, src, null);
                             k = 1 - p;
                         }
                         EnsureCleared(canvas);
@@ -1415,13 +1642,28 @@ namespace StillsAndReels
                 case "wipeup":
                 case "wipedown":
                     {
-                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                        if (a != null) DrawClip(canvas, a, t, src, null);
                         Rectangle r;
                         if (kind == "wipeleft") r = Rectangle.FromLTRB((int)Math.Round(cw * (1 - e)), 0, (int)cw, (int)ch);
                         else if (kind == "wiperight") r = Rectangle.FromLTRB(0, 0, (int)Math.Round(cw * e), (int)ch);
                         else if (kind == "wipeup") r = Rectangle.FromLTRB(0, (int)Math.Round(ch * (1 - e)), (int)cw, (int)ch);
                         else r = Rectangle.FromLTRB(0, 0, (int)cw, (int)Math.Round(ch * e));
-                        DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, new Layer { HasClip = true, Clip = r });
+                        DrawClip(canvas, b, t, src, new Fx { Like = new Layer { HasClip = true, Clip = r } });
+                        break;
+                    }
+                case "softleft":
+                case "softright":
+                case "diagonal":
+                    {
+                        // a wide soft edge sweeping across; it starts and ends fully off the canvas
+                        double soft = cw * 0.25;
+                        if (kind == "softright") shaped(Shapes.Edge(1, 0, -soft / 2 + (cw + soft) * e, soft));
+                        else if (kind == "softleft") shaped(Shapes.Edge(-1, 0, -cw - soft / 2 + (cw + soft) * e, soft));
+                        else
+                        {
+                            double len = Math.Sqrt(cw * cw + ch * ch), nx = cw / len, ny = ch / len;
+                            shaped(Shapes.Edge(nx, ny, -soft / 2 + (len + soft) * e, soft));
+                        }
                         break;
                     }
                 case "slideleft":
@@ -1434,52 +1676,136 @@ namespace StillsAndReels
                         else if (kind == "slideright") dx = cw;
                         else if (kind == "slideup") dy = -ch;
                         else dy = ch;
-                        if (a != null) DrawClip(canvas, a, t, src, 1, new PointF((float)(dx * e), (float)(dy * e)), 1f, null);
-                        DrawClip(canvas, b, t, src, a == null ? e : 1, new PointF((float)(-dx * (1 - e)), (float)(-dy * (1 - e))), 1f, null);
+                        if (a != null) DrawClip(canvas, a, t, src, new Fx { Offset = new PointF((float)(dx * e), (float)(dy * e)) });
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = a == null ? e : 1, Offset = new PointF((float)(-dx * (1 - e)), (float)(-dy * (1 - e))) });
+                        break;
+                    }
+                case "coverleft":
+                case "coverright":
+                case "coverup":
+                case "coverdown":
+                    {
+                        // the new clip slides in over the old one, which stays where it is
+                        float dx = 0, dy = 0;
+                        if (kind == "coverleft") dx = cw;
+                        else if (kind == "coverright") dx = -cw;
+                        else if (kind == "coverup") dy = ch;
+                        else dy = -ch;
+                        if (a != null) DrawClip(canvas, a, t, src, null);
+                        DrawClip(canvas, b, t, src, new Fx { Offset = new PointF((float)(dx * (1 - e)), (float)(dy * (1 - e))) });
                         break;
                     }
                 case "circle":
-                    {
-                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
-                        double rad = Math.Sqrt(cw * cw + ch * ch) / 2 * e, mx = cw / 2.0, my = ch / 2.0;
-                        DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, new Layer { Alpha = Shapes.Circle(mx, my, rad) });
-                        break;
-                    }
+                    shaped(Shapes.Circle(mx, my, Math.Sqrt(cw * cw + ch * ch) / 2 * e));
+                    break;
+                case "diamond":
+                    shaped(Shapes.Diamond(mx, my, (cw + ch) / 2.0 * e * 1.02));
+                    break;
+                case "clock":
+                    shaped(Shapes.Clock(mx, my, e));
+                    break;
+                case "barnh":
+                    shaped(Shapes.Doors(mx, my, cw / 2.0 * e, true));
+                    break;
+                case "barnv":
+                    shaped(Shapes.Doors(mx, my, ch / 2.0 * e, false));
+                    break;
+                case "blinds":
+                    shaped(Shapes.Blinds(Math.Max(4, ch / 9.0), e));
+                    break;
                 case "zoom":
                     {
-                        if (a != null) DrawClip(canvas, a, t, src, 1 - e * 0.6, PointF.Empty, (float)(1 + 0.35 * e), null);
-                        DrawClip(canvas, b, t, src, e, PointF.Empty, (float)(0.75 + 0.25 * e), null);
+                        if (a != null) DrawClip(canvas, a, t, src, new Fx { Opacity = 1 - e * 0.6, Scale = (float)(1 + 0.35 * e) });
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = e, Scale = (float)(0.75 + 0.25 * e) });
+                        break;
+                    }
+                case "zoomout":
+                    {
+                        if (a != null) DrawClip(canvas, a, t, src, new Fx { Opacity = 1 - e * 0.6, Scale = (float)(1 - 0.3 * e) });
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = e, Scale = (float)(1.35 - 0.35 * e) });
+                        break;
+                    }
+                case "spin":
+                    {
+                        if (a != null) DrawClip(canvas, a, t, src, new Fx { Opacity = 1 - e, Scale = (float)(1 - 0.5 * e), Rotation = (float)(120 * e) });
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = e, Scale = (float)(0.5 + 0.5 * e), Rotation = (float)(-120 * (1 - e)) });
+                        break;
+                    }
+                case "blur":
+                    {
+                        // both clips go out of focus as one gives way to the other
+                        double soft = Math.Sin(p * Math.PI) * 70;
+                        if (a != null) DrawClip(canvas, a, t, src, new Fx { Blur = soft });
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = e, Blur = soft });
+                        break;
+                    }
+                case "pixelate":
+                    {
+                        double blocks = Math.Sin(p * Math.PI) * 55;
+                        if (a != null && p < 0.5) DrawClip(canvas, a, t, src, new Fx { Pixelate = blocks });
+                        else DrawClip(canvas, b, t, src, new Fx { Pixelate = blocks, Opacity = a == null ? Math.Min(1, p * 2) : 1 });
+                        break;
+                    }
+                case "glitch":
+                    {
+                        // colour fringes and a jumping picture, cutting to the new clip half-way
+                        double k = Math.Sin(p * Math.PI);
+                        int step = (int)(t * project.Fps);
+                        uint n = (uint)(step * 2654435761u) ^ 0x9E3779B9u; n ^= n << 13; n ^= n >> 17; n ^= n << 5;
+                        float jump = (float)(((n & 0xFF) / 255.0 - 0.5) * cw * 0.06 * k);
+                        var fx = new Fx { Split = 100 * k, Offset = new PointF(jump, 0) };
+                        if (a != null && p < 0.5) DrawClip(canvas, a, t, src, fx);
+                        else { fx.Opacity = a == null ? Math.Min(1, p * 2) : 1; DrawClip(canvas, b, t, src, fx); }
                         break;
                     }
                 default: // dissolve
                     {
-                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
-                        DrawClip(canvas, b, t, src, e, PointF.Empty, 1f, null);
+                        if (a != null) DrawClip(canvas, a, t, src, null);
+                        DrawClip(canvas, b, t, src, new Fx { Opacity = e });
                         break;
                     }
             }
         }
 
-        /// <summary>
-        /// Draws one clip. extraOpacity, offset and extraScale come from a transition; 'like' carries a transition's
-        /// clip rectangle or shape (only its HasClip, Clip and Alpha are read).
-        /// </summary>
-        public void DrawClip(Frame canvas, Clip c, double t, IFrameSource src, double extraOpacity, PointF offset, float extraScale, Layer like)
+        /// <summary>Draws one clip; fx is what a running transition adds (null for none).</summary>
+        public void DrawClip(Frame canvas, Clip c, double t, IFrameSource src, Fx fx)
         {
             if (!c.IsVisual) return;
             float cw = canvas.Width, ch = canvas.Height;
-            var p = c.PlacementAt(t);
+            var p = c.ShownAt(t);
+            double extraOpacity = fx != null ? fx.Opacity : 1;
+            PointF offset = fx != null ? fx.Offset : PointF.Empty;
+            float extraScale = fx != null ? fx.Scale : 1f;
+            Layer like = fx != null ? fx.Like : null;
+            if (fx != null && fx.Rotation != 0) p.Rotation += fx.Rotation;
             double opacity = Math.Max(0, Math.Min(1, p.Opacity)) * c.FadeAt(t) * extraOpacity;
             if (opacity <= 0.002) return;
             var layer = new Layer { Opacity = opacity, Sharp = HighQuality, Mode = Looks.BlendMode(c.Blend) };
             if (like != null) { layer.HasClip = like.HasClip; layer.Clip = like.Clip; layer.Alpha = like.Alpha; }
+            if (fx != null && c.Kind != ClipKind.Text && (fx.Blur > 0.5 || fx.Pixelate > 0.5 || fx.Split > 0.5))
+            {
+                // the transition's own blur, mosaic or colour fringes, on top of whatever the clip already has
+                var copy = c.Clone();
+                copy.Blur = Math.Min(100, c.Blur + fx.Blur); copy.Pixelate = Math.Min(100, c.Pixelate + fx.Pixelate); copy.RgbSplit = Math.Min(100, c.RgbSplit + fx.Split);
+                c = copy;
+            }
             using (var m = PlacementMatrix(p, cw, ch, offset, extraScale))
             {
                 if (c.Kind == ClipKind.Text)
                 {
                     EnsureCleared(canvas);
-                    bool moving = c.HasKeys || extraScale != 1f || offset != PointF.Empty;
-                    TextRaster.Draw(canvas, c, m, opacity, moving, c.MaxScale * Math.Max(1f, extraScale), layer);
+                    double reveal = c.RevealAt(t);
+                    if (reveal < 1)
+                    {
+                        // typewriter: only the first letters so far, laid out where they will end up
+                        int letters = 0;
+                        foreach (char chr in c.Text ?? "") if (!char.IsWhiteSpace(chr)) letters++;
+                        int show = (int)Math.Floor(letters * reveal + 1e-6);
+                        if (show <= 0 && c.BoxOpacity <= 0.001 && c.TextStyle != "lower") return;
+                        if (show < letters) { c = c.Clone(); c.RevealChars = show <= 0 ? -1 : show; }
+                    }
+                    bool moving = c.IsAnimated || extraScale != 1f || offset != PointF.Empty || (fx != null && fx.Rotation != 0);
+                    TextRaster.Draw(canvas, c, m, opacity, moving, c.MaxScale * 1.15 * Math.Max(1f, extraScale), layer);
                     return;
                 }
                 var mi = media(c.MediaId);
@@ -1640,6 +1966,79 @@ namespace StillsAndReels
     /// <summary>Shapes used by transitions, as per-row alpha for the renderer.</summary>
     internal static unsafe class Shapes
     {
+        static byte Cover(double v) { return (byte)(v <= 0 ? 0 : v >= 1 ? 255 : (int)(v * 255 + 0.5)); }
+
+        /// <summary>Everything on the near side of a straight edge: points where nx·x + ny·y is below 'reach', fading over 'soft' pixels.</summary>
+        public static RowAlpha Edge(double nx, double ny, double reach, double soft)
+        {
+            soft = Math.Max(1, soft);
+            return (y, x, n, a) =>
+            {
+                double d0 = reach - ny * (y + 0.5);
+                for (int i = 0; i < n; i++)
+                {
+                    double v = (d0 - nx * (x + i + 0.5)) / soft + 0.5;
+                    if (v > 0 && v < 1) v = v * v * (3 - 2 * v);
+                    a[i] = Cover(v);
+                }
+            };
+        }
+
+        /// <summary>A diamond growing from the centre; size is its half-width plus half-height.</summary>
+        public static RowAlpha Diamond(double cx, double cy, double size)
+        {
+            return (y, x, n, a) =>
+            {
+                double dy = Math.Abs(y + 0.5 - cy);
+                for (int i = 0; i < n; i++) a[i] = Cover((size - dy - Math.Abs(x + i + 0.5 - cx)) * 0.7071 + 0.5);
+            };
+        }
+
+        /// <summary>The hand of a clock sweeping round from twelve; turn is 0..1 of a full circle.</summary>
+        public static RowAlpha Clock(double cx, double cy, double turn)
+        {
+            double sweep = Math.Max(0, Math.Min(1, turn)) * Math.PI * 2;
+            return (y, x, n, a) =>
+            {
+                double dy = y + 0.5 - cy;
+                for (int i = 0; i < n; i++)
+                {
+                    double dx = x + i + 0.5 - cx;
+                    double ang = Math.Atan2(dx, -dy);          // 0 at twelve o'clock, growing clockwise
+                    if (ang < 0) ang += Math.PI * 2;
+                    // soften by about a pixel, measured along the circle at this distance from the centre
+                    double r = Math.Sqrt(dx * dx + dy * dy);
+                    a[i] = sweep >= Math.PI * 2 - 1e-9 ? (byte)255 : Cover((sweep - ang) * Math.Max(1, r) + 0.5);
+                }
+            };
+        }
+
+        /// <summary>Two doors opening from the middle: a band of the given half-width, upright (sideways = true) or lying flat.</summary>
+        public static RowAlpha Doors(double cx, double cy, double half, bool sideways)
+        {
+            return (y, x, n, a) =>
+            {
+                if (!sideways)
+                {
+                    byte v = Cover(half - Math.Abs(y + 0.5 - cy) + 0.5);
+                    for (int i = 0; i < n; i++) a[i] = v;
+                    return;
+                }
+                for (int i = 0; i < n; i++) a[i] = Cover(half - Math.Abs(x + i + 0.5 - cx) + 0.5);
+            };
+        }
+
+        /// <summary>Slats of the given height, each opening from its top edge.</summary>
+        public static RowAlpha Blinds(double slat, double open)
+        {
+            return (y, x, n, a) =>
+            {
+                double within = (y + 0.5) % slat;
+                byte v = Cover(open * (slat + 1) - within);
+                for (int i = 0; i < n; i++) a[i] = v;
+            };
+        }
+
         /// <summary>A filled circle with a soft one-pixel edge.</summary>
         public static RowAlpha Circle(double cx, double cy, double radius)
         {

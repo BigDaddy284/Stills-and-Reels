@@ -70,6 +70,18 @@ namespace StillsAndReels
         [DataMember] public double BorderWidth;                // 0..1 of half the shorter side
         [DataMember] public int BorderColor;                   // 0 reads as white
         [DataMember] public double DropShadow;                 // 0..1
+        [DataMember] public double Pixelate, Glow, RgbSplit;   // effects, 0..100
+        [DataMember] public int Mirror;                        // 1 left half onto the right, 2 right onto left, 3 top onto bottom, 4 bottom onto top
+        [DataMember] public double Highlights, Shadows;        // -100..100
+        [DataMember] public string Motion = "";                // movement over the whole clip: zoomin, zoomout, panleft, …
+        [DataMember] public double MotionAmount;               // strength; 0 reads as 1
+        [DataMember] public string AnimIn = "", AnimOut = "";  // how the clip arrives and leaves: fade, slideup, pop, type, …
+        [DataMember] public double AnimInTime, AnimOutTime;    // seconds; 0 reads as 0.5
+        [DataMember] public int TextColor2;                    // second colour of a top-to-bottom gradient; 0 = none
+        [DataMember] public double LineSpacing;                // extra line spacing, -0.5..2 of the normal gap
+
+        /// <summary>Text only, not saved: how many characters show while a typewriter animation runs (0 = all).</summary>
+        public int RevealChars;
 
         // ---- sound
         [DataMember] public double Volume = 1;
@@ -110,6 +122,9 @@ namespace StillsAndReels
             if (Filter == null) Filter = "";
             if (Transition == null) Transition = "";
             if (Blend == null) Blend = "";
+            if (Motion == null) Motion = "";
+            if (AnimIn == null) AnimIn = "";
+            if (AnimOut == null) AnimOut = "";
             if (Text == null) Text = "";
             if (string.IsNullOrEmpty(Font)) Font = "Segoe UI";
             if (string.IsNullOrEmpty(TextStyle)) TextStyle = "plain";
@@ -157,8 +172,106 @@ namespace StillsAndReels
             {
                 double m = Scale;
                 if (HasKeys) foreach (var k in Keys) m = Math.Max(m, k.Scale);
+                if (!string.IsNullOrEmpty(Motion)) m *= 1 + 0.2 * MotionStrength;
                 return Math.Max(0.05, m);
             }
+        }
+
+        public double MotionStrength { get { return MotionAmount > 0.001 ? MotionAmount : 1; } }
+        public double AnimInLength { get { return Math.Min(AnimInTime > 0.001 ? AnimInTime : 0.5, Duration / 2); } }
+        public double AnimOutLength { get { return Math.Min(AnimOutTime > 0.001 ? AnimOutTime : 0.5, Duration / 2); } }
+        public bool IsAnimated { get { return HasKeys || !string.IsNullOrEmpty(Motion) || !string.IsNullOrEmpty(AnimIn) || !string.IsNullOrEmpty(AnimOut); } }
+
+        /// <summary>
+        /// Where the clip is actually drawn at timeline time t: its own placement (and keyframes) plus the chosen
+        /// movement and the way it arrives and leaves.
+        /// </summary>
+        public Placement ShownAt(double t)
+        {
+            var p = PlacementAt(t);
+            if (!string.IsNullOrEmpty(Motion))
+            {
+                double u = Duration > 1e-6 ? Math.Max(0, Math.Min(1, (t - Start) / Duration)) : 0;
+                double k = MotionStrength, lt = t - Start;
+                switch (Motion)
+                {
+                    case "zoomin": p.Scale *= 1 + 0.18 * k * u; break;
+                    case "zoomout": p.Scale *= 1 + 0.18 * k * (1 - u); break;
+                    // pans enlarge the clip a little so its edges stay off the canvas while it travels
+                    case "panleft": p.Scale *= 1 + 0.12 * k; p.X += (0.5 - u) * 0.1 * k * p.Scale; break;
+                    case "panright": p.Scale *= 1 + 0.12 * k; p.X -= (0.5 - u) * 0.1 * k * p.Scale; break;
+                    case "panup": p.Scale *= 1 + 0.12 * k; p.Y += (0.5 - u) * 0.1 * k * p.Scale; break;
+                    case "pandown": p.Scale *= 1 + 0.12 * k; p.Y -= (0.5 - u) * 0.1 * k * p.Scale; break;
+                    case "shake":
+                        p.Scale *= 1 + 0.04 * k;
+                        p.X += (Math.Sin(lt * 31.1) + 0.6 * Math.Sin(lt * 17.3 + 1.3)) * 0.006 * k;
+                        p.Y += (Math.Sin(lt * 27.7 + 0.7) + 0.6 * Math.Sin(lt * 13.9 + 2.1)) * 0.008 * k;
+                        p.Rotation += Math.Sin(lt * 23.3 + 0.4) * 0.5 * k;
+                        break;
+                    case "pulse": p.Scale *= 1 + 0.05 * k * Math.Pow(0.5 + 0.5 * Math.Sin(lt * Math.PI * 2 * 1.2), 3); break;
+                    case "float": p.Y += Math.Sin(lt * Math.PI * 2 / 3.2) * 0.012 * k; p.Rotation += Math.Sin(lt * Math.PI * 2 / 4.6 + 0.8) * 1.2 * k; break;
+                    case "spin": p.Rotation += 360 * u * Math.Round(Math.Max(1, k)); break;
+                    case "swing": p.Rotation += Math.Sin(lt * Math.PI * 2 / 2.4) * 6 * k; break;
+                }
+            }
+            if (!string.IsNullOrEmpty(AnimIn))
+            {
+                double d = AnimInLength;
+                if (d > 1e-6 && t - Start < d) Arrive(ref p, AnimIn, (t - Start) / d);
+            }
+            if (!string.IsNullOrEmpty(AnimOut))
+            {
+                double d = AnimOutLength;
+                if (d > 1e-6 && End - t < d) Arrive(ref p, AnimOut, (End - t) / d);
+            }
+            return p;
+        }
+
+        /// <summary>Applies an arrival animation at progress u (0 = just appearing, 1 = in place). Leaving is the same played backwards.</summary>
+        static void Arrive(ref Placement p, string kind, double u)
+        {
+            u = Math.Max(0, Math.Min(1, u));
+            double e = 1 - (1 - u) * (1 - u) * (1 - u);   // fast at first, settling gently
+            double q = 1 - e;
+            switch (kind)
+            {
+                case "fade": p.Opacity *= u; break;
+                case "slideup": p.Y += 0.14 * q; p.Opacity *= Math.Min(1, u * 2.5); break;
+                case "slidedown": p.Y -= 0.14 * q; p.Opacity *= Math.Min(1, u * 2.5); break;
+                case "slideleft": p.X += 0.18 * q; p.Opacity *= Math.Min(1, u * 2.5); break;
+                case "slideright": p.X -= 0.18 * q; p.Opacity *= Math.Min(1, u * 2.5); break;
+                case "pop":
+                    {
+                        // grows past its size and settles back
+                        double c1 = 1.70158, c3 = c1 + 1, v = u - 1;
+                        double back = 1 + c3 * v * v * v + c1 * v * v;
+                        p.Scale *= Math.Max(0.01, 0.4 + 0.6 * back); p.Opacity *= Math.Min(1, u * 4);
+                        break;
+                    }
+                case "grow": p.Scale *= 0.6 + 0.4 * e; p.Opacity *= u; break;
+                case "shrink": p.Scale *= 1 + 0.6 * q; p.Opacity *= u; break;
+                case "spin": p.Rotation -= 120 * q; p.Scale *= 0.4 + 0.6 * e; p.Opacity *= Math.Min(1, u * 2); break;
+                case "drop":
+                    {
+                        // falls from above and bounces
+                        double b = u, n1 = 7.5625, d1 = 2.75;
+                        if (b < 1 / d1) b = n1 * b * b;
+                        else if (b < 2 / d1) { b -= 1.5 / d1; b = n1 * b * b + 0.75; }
+                        else if (b < 2.5 / d1) { b -= 2.25 / d1; b = n1 * b * b + 0.9375; }
+                        else { b -= 2.625 / d1; b = n1 * b * b + 0.984375; }
+                        p.Y -= 0.6 * (1 - b); p.Opacity *= Math.Min(1, u * 5);
+                        break;
+                    }
+            }
+        }
+
+        /// <summary>For a typewriter animation: the share of the text showing at time t (1 = all of it).</summary>
+        public double RevealAt(double t)
+        {
+            double r = 1;
+            if (AnimIn == "type") { double d = AnimInLength; if (d > 1e-6) r = Math.Min(r, (t - Start) / d); }
+            if (AnimOut == "type") { double d = AnimOutLength; if (d > 1e-6) r = Math.Min(r, (End - t) / d); }
+            return Math.Max(0, Math.Min(1, r));
         }
 
         /// <summary>Picture fade multiplier at timeline time t.</summary>
@@ -185,6 +298,7 @@ namespace StillsAndReels
             {
                 return Math.Abs(Brightness) > 0.01 || Math.Abs(Contrast) > 0.01 || Math.Abs(Saturation) > 0.01 ||
                        Math.Abs(Exposure) > 0.01 || Math.Abs(Temperature) > 0.01 || Math.Abs(Tint) > 0.01 || Math.Abs(Hue) > 0.01 ||
+                       Math.Abs(Highlights) > 0.01 || Math.Abs(Shadows) > 0.01 ||
                        (!string.IsNullOrEmpty(Filter) && FilterAmount > 0.001);
             }
         }
@@ -397,7 +511,11 @@ namespace StillsAndReels
     /// <summary>Named looks ("filters") as colour matrices, plus the transitions offered by the editor.</summary>
     internal static class Looks
     {
-        public static readonly string[] FilterIds = { "mono", "noir", "sepia", "vintage", "warm", "cool", "vivid", "fade", "cinematic", "dramatic", "invert" };
+        public static readonly string[] FilterIds =
+        {
+            "mono", "noir", "sepia", "vintage", "warm", "cool", "vivid", "fade", "cinematic", "dramatic",
+            "tealorange", "golden", "sunset", "arctic", "forest", "rose", "pastel", "matte", "bleach", "punch", "technicolor", "night", "invert",
+        };
 
         public static string FilterName(string id)
         {
@@ -414,6 +532,61 @@ namespace StillsAndReels
                 case "cinematic": return "Cinematic";
                 case "dramatic": return "Dramatic";
                 case "invert": return "Invert";
+                case "tealorange": return "Teal & orange";
+                case "golden": return "Golden hour";
+                case "sunset": return "Sunset";
+                case "arctic": return "Arctic";
+                case "forest": return "Forest";
+                case "rose": return "Rose";
+                case "pastel": return "Pastel";
+                case "matte": return "Matte";
+                case "bleach": return "Bleach";
+                case "punch": return "Punch";
+                case "technicolor": return "Technicolor";
+                case "night": return "Night";
+                default: return "None";
+            }
+        }
+
+        public static readonly string[] MotionIds = { "zoomin", "zoomout", "panleft", "panright", "panup", "pandown", "float", "swing", "pulse", "shake", "spin" };
+
+        public static string MotionName(string id)
+        {
+            switch (id)
+            {
+                case "zoomin": return "Slow zoom in";
+                case "zoomout": return "Slow zoom out";
+                case "panleft": return "Pan left";
+                case "panright": return "Pan right";
+                case "panup": return "Pan up";
+                case "pandown": return "Pan down";
+                case "float": return "Float";
+                case "swing": return "Swing";
+                case "pulse": return "Pulse";
+                case "shake": return "Shake";
+                case "spin": return "Spin";
+                default: return "None";
+            }
+        }
+
+        /// <summary>Ways a clip can arrive (and, played backwards, leave). "type" is for text only.</summary>
+        public static readonly string[] AnimIds = { "fade", "slideup", "slidedown", "slideleft", "slideright", "pop", "grow", "shrink", "spin", "drop", "type" };
+
+        public static string AnimName(string id, bool leaving)
+        {
+            switch (id)
+            {
+                case "fade": return "Fade";
+                case "slideup": return leaving ? "Slide down" : "Slide up";
+                case "slidedown": return leaving ? "Slide up" : "Slide down";
+                case "slideleft": return leaving ? "Slide right" : "Slide left";
+                case "slideright": return leaving ? "Slide left" : "Slide right";
+                case "pop": return "Pop";
+                case "grow": return leaving ? "Shrink away" : "Grow";
+                case "shrink": return leaving ? "Grow away" : "Shrink";
+                case "spin": return "Spin";
+                case "drop": return leaving ? "Fly up" : "Drop";
+                case "type": return leaving ? "Untype" : "Typewriter";
                 default: return "None";
             }
         }
@@ -454,7 +627,12 @@ namespace StillsAndReels
             }
         }
 
-        public static readonly string[] TransitionIds = { "dissolve", "black", "white", "wipeleft", "wiperight", "wipeup", "wipedown", "slideleft", "slideright", "slideup", "slidedown", "circle", "zoom" };
+        public static readonly string[] TransitionIds =
+        {
+            "dissolve", "black", "white", "blur", "wipeleft", "wiperight", "wipeup", "wipedown", "softleft", "softright", "diagonal",
+            "slideleft", "slideright", "slideup", "slidedown", "coverleft", "coverright", "coverup", "coverdown",
+            "circle", "diamond", "clock", "barnh", "barnv", "blinds", "zoom", "zoomout", "spin", "pixelate", "glitch",
+        };
 
         public static string TransitionName(string id)
         {
@@ -473,6 +651,23 @@ namespace StillsAndReels
                 case "slidedown": return "Slide down";
                 case "circle": return "Circle";
                 case "zoom": return "Zoom";
+                case "blur": return "Blur";
+                case "softleft": return "Soft wipe left";
+                case "softright": return "Soft wipe right";
+                case "diagonal": return "Diagonal wipe";
+                case "coverleft": return "Cover left";
+                case "coverright": return "Cover right";
+                case "coverup": return "Cover up";
+                case "coverdown": return "Cover down";
+                case "diamond": return "Diamond";
+                case "clock": return "Clock";
+                case "barnh": return "Doors";
+                case "barnv": return "Shutters";
+                case "blinds": return "Blinds";
+                case "zoomout": return "Zoom out";
+                case "spin": return "Spin";
+                case "pixelate": return "Pixelate";
+                case "glitch": return "Glitch";
                 default: return "None";
             }
         }
