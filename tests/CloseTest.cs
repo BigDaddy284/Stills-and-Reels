@@ -1,7 +1,7 @@
 using System; using System.Reflection; using System.Windows.Forms;
 class T {
   [STAThread] static int Main(string[] a) {
-    var asm = Assembly.LoadFrom("/home/claude/PicturePreview/build/StillsAndReels.exe");
+    var asm = Assembly.LoadFrom(Environment.GetEnvironmentVariable("SR_EXE") ?? "build/StillsAndReels.exe");
     var mf = asm.GetType("StillsAndReels.MainForm");
     var cache = asm.GetType("StillsAndReels.ImageCache"); cache.GetMethod("Initialize").Invoke(null,null);
     int errors = 0;

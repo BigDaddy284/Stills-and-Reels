@@ -3,7 +3,7 @@ class T {
   static object S(Type t, string m, params object[] a){ return t.GetMethod(m, BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic).Invoke(null,a); }
   static int fails=0; static void Check(bool c,string n){ Console.WriteLine((c?"PASS ":"FAIL ")+n); if(!c) fails++; }
   static void Main(){
-    var asm = Assembly.LoadFrom("/home/claude/PicturePreview/build/StillsAndReels.exe");
+    var asm = Assembly.LoadFrom(Environment.GetEnvironmentVariable("SR_EXE") ?? "build/StillsAndReels.exe");
     var cache=asm.GetType("StillsAndReels.ImageCache"); var li=asm.GetType("StillsAndReels.LoadedImage");
     var ft=asm.GetType("StillsAndReels.FileTypes"); var es=asm.GetType("StillsAndReels.EditSession");
     var st=asm.GetType("StillsAndReels.Stroke"); var tool=asm.GetType("StillsAndReels.EditTool"); var saver=asm.GetType("StillsAndReels.ImageSaver");

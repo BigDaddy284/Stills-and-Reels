@@ -4,7 +4,7 @@ class T {
   static BindingFlags SF = BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic;
   static int fails=0; static void Check(bool c,string n){ Console.WriteLine((c?"PASS ":"FAIL ")+n); if(!c) fails++; }
   static void Main(string[] a){
-    var asm = Assembly.LoadFrom(a.Length>0?a[0]:"/home/claude/PicturePreview/build/StillsAndReels.exe");
+    var asm = Assembly.LoadFrom(a.Length>0?a[0]:(Environment.GetEnvironmentVariable("SR_EXE") ?? "build/StillsAndReels.exe"));
     var cache=asm.GetType("StillsAndReels.ImageCache"); var pw=asm.GetType("StillsAndReels.PickupWatcher");
     cache.GetMethod("Initialize").Invoke(null,null);
     Func<string,object[],object> P=(m,xs)=>pw.GetMethod(m,SF).Invoke(null,xs);

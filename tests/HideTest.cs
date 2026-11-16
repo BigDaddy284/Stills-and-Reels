@@ -1,7 +1,7 @@
 using System; using System.Reflection; using System.Windows.Forms;
 class T {
   [STAThread] static int Main(string[] a) {
-    var asm = Assembly.LoadFrom("/home/claude/PicturePreview/build/StillsAndReels.exe");
+    var asm = Assembly.LoadFrom(Environment.GetEnvironmentVariable("SR_EXE") ?? "build/StillsAndReels.exe");
     var mf = asm.GetType("StillsAndReels.MainForm");
     asm.GetType("StillsAndReels.ImageCache").GetMethod("Initialize").Invoke(null,null);
     var BF = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance;

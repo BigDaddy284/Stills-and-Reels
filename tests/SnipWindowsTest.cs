@@ -25,7 +25,7 @@ class T {
   static bool OnScreen(Form w){ foreach (var s in Screen.AllScreens) if (s.WorkingArea.Contains(new Point(w.Left+w.Width/2, w.Top+20))) return true; return false; }
 
   [STAThread] static int Main(string[] a) {
-    asm = Assembly.LoadFrom(a.Length>2 ? a[2] : "/home/claude/PicturePreview/build/StillsAndReels.exe");
+    asm = Assembly.LoadFrom(a.Length>2 ? a[2] : (Environment.GetEnvironmentVariable("SR_EXE") ?? "build/StillsAndReels.exe"));
     mf = asm.GetType("StillsAndReels.MainForm");
     asm.GetType("StillsAndReels.ImageCache").GetMethod("Initialize").Invoke(null,null);
     Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
