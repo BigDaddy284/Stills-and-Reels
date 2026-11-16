@@ -2,7 +2,7 @@
 # Builds the app and runs the Linux tests (Mono, Xvfb, openbox, system ffmpeg, Python 3 with Pillow for fixtures).
 #   tests/run.sh            quick set: logic, pickup, picture, compositor, project, sound, export, scrub
 #   tests/run.sh all        adds the window tests (close, hide, snip windows, theme) and the recording finish test
-#   tests/run.sh <name>...  only the named tests (logic pickup picture compose sound export scrub play close hide snip theme finish bench shots)
+#   tests/run.sh <name>...  only the named tests (logic pickup picture compose sound export scrub play close hide snip sniptools theme finish bench shots)
 #                           bench times the compositor; shots writes screenshots of the editor to $SR_WORK/shots
 # The recording sync tests (AvSyncTest) are run by hand: see the comment at the top of tests/AvSyncTest.cs.
 set -u
@@ -75,6 +75,7 @@ t_play()    { compile ScrubTest && run play mono "$WORK/ScrubTest.exe" "$SR_EXE"
 t_close()   { compile CloseTest && run close mono "$WORK/CloseTest.exe" OpenSnip OpenVideoSnip; }
 t_hide()    { compile HideTest && run hide-picture mono "$WORK/HideTest.exe" picture && run hide-video mono "$WORK/HideTest.exe" video; }
 t_snip()    { compile SnipWindowsTest || return; for m in windows "start pic" "start vid" keep hide timer args; do run "snip $m" mono "$WORK/SnipWindowsTest.exe" $m; done; }
+t_sniptools() { compile SnipToolsTest -main:SnipToolsTest $WITH_SRC && run sniptools mono "$WORK/SnipToolsTest.exe"; }
 t_theme()   { compile ThemeTest && run theme mono "$WORK/ThemeTest.exe" "$SR_EXE"; }
 t_finish()  { compile FinishTest && run finish mono "$WORK/FinishTest.exe" "$SR_EXE"; }
 t_bench()   { [ -f tests/Bench.cs ] || return 0; compile Bench -main:Bench $WITH_SRC && mono "$WORK/Bench.exe" "$WORK"; }
@@ -83,7 +84,7 @@ t_shots()   { compile UiShot -main:UiShot $WITH_SRC -resource:engine/ffmpeg.exe.
 
 fixtures
 SET="${*:-logic pickup picture compose sound export scrub}"
-[ "$SET" = "all" ] && SET="logic pickup picture compose sound export scrub play close hide snip theme finish"
+[ "$SET" = "all" ] && SET="logic pickup picture compose sound export scrub play close hide snip sniptools theme finish"
 for t in $SET; do "t_$t"; done
 if [ -n "$FAILED" ]; then echo "FAILED:$FAILED"; exit 1; fi
 echo "ALL TESTS PASSED ($SET)"
