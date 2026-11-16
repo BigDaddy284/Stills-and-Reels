@@ -11,7 +11,10 @@ namespace StillsAndReels
         Volume, VolumeLow, Mute, Fullscreen, ExitFullscreen, Minus, Plus, Grid, Lasso, RectSelect, Screen,
         Settings, Hand, Speed, Folder, Sun, Moon, Music, Refresh,
         Scissors, Snowflake, Text, Magnet, Link, FitWidth, Import, Export, Diamond, Transition, Filter, Sparkle,
-        Record, Stop, Mic, Eye, EyeOff, Lock, Unlock, Layers, Paste, Cursor, Audio, Captions, Duplicate, Wave, Detach, ChevronLeft, ChevronRight, Timer
+        Record, Stop, Mic, Eye, EyeOff, Lock, Unlock, Layers, Paste, Cursor, Audio, Captions, Duplicate, Wave, Detach, ChevronLeft, ChevronRight, Timer,
+        // picture tools (drawn in PicIcons.cs)
+        EllipseSelect = 1000, Wand, Bucket, Picker, LineTool, ArrowTool, RectTool, RoundRectTool, EllipseTool, StepTool, Redact,
+        Sliders, ArrowUp, ArrowDown, MergeDown, Resize, CanvasSize, Straighten, Trim, Bold, Italic, ToFront, ToBack, Info, Slideshow, Curves, Window
     }
 
     /// <summary>Line icons drawn in code on a 24×24 grid (no image files needed).</summary>
@@ -481,6 +484,9 @@ namespace StillsAndReels
                     g.DrawLine(p, 12, 13.5f, 12, 9.5f);
                     g.DrawLine(p, 12, 13.5f, 14.8f, 15.5f);
                     g.DrawLine(p, 18.2f, 6.8f, 19.6f, 5.4f);
+                    break;
+                default:
+                    PicIcons.Shape(g, icon, p, f);
                     break;
             }
         }
