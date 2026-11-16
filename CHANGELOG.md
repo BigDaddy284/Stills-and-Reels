@@ -86,6 +86,7 @@ The biggest release so far: both editors were rebuilt for speed and given severa
 
 ### Fixes
 
+- **Export on PCs set to UTF-8.** When Windows' "use Unicode UTF-8" setting is on (or the app is started from a console set to UTF-8), the .NET Framework puts three stray bytes into the encoder's input ahead of the first frame, which shifted every pixel and turned the exported picture into coloured noise. This was true of every earlier version too. The app now measures how many bytes arrive ahead of its own, once, and has the engine skip them.
 - The status bar no longer gets switched off for the next start when the app is closed from a snip-only start or while the main window is hidden.
 
 ### Known limits in 3.0

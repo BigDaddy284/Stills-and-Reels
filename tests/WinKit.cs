@@ -101,8 +101,10 @@ static class WinKit
                     psnr = mt.Success ? ", " + mt.Groups[1].Value + " dB against the source" : "";
                 }
                 bool asAsked = !card || (job.UsedHardware != null && !job.UsedFallback);
+                // the picture has to be the source's, not just a file of the right size
+                double db; if (ok && (!double.TryParse(psnr.Replace(", ", "").Replace(" dB against the source", ""), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out db) || db < 30)) ok = false;
                 Console.WriteLine((ok && asAsked ? "PASS " : "FAIL ") + f + (card ? " on the graphics card" : " on the processor") + ": " +
-                    (err != null ? err.Message : secs.ToString("0.0") + " s for 20 s of 1080p, " + new FileInfo(outPath).Length / 1048576.0 + " MB" + psnr +
+                    (err != null ? err.Message : secs.ToString("0.0") + " s for 20 s of 1080p, " + (new FileInfo(outPath).Length / 1048576.0).ToString("0.0") + " MB" + psnr +
                     ", encoder used: " + (job.UsedHardware ?? "software") + (job.UsedFallback ? " (the card failed and the processor finished it)" : "")));
                 if (!(ok && asAsked)) fails++;
             }
@@ -131,7 +133,7 @@ static class WinKit
     {
         string here = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         Directory.SetCurrentDirectory(here);
-        using (var logFile = new StreamWriter(Path.Combine(here, "winkit-log.txt"), false, new UTF8Encoding(false)))
+        using (var logFile = new StreamWriter(Path.Combine(here, "winkit-log.txt"), false, new UTF8Encoding(true)))
         {
             Console.SetOut(new Tee(Console.Out, logFile));
             work = Path.Combine(here, "work");
@@ -148,9 +150,17 @@ static class WinKit
             }
             Fixtures();
             ImageCache.Initialize();
+            // What the runtime puts into a child's input ahead of the app's own bytes depends on these code pages:
+            // a UTF-8 one means a 3-byte mark, which the app has to find and make FFmpeg skip.
+            Console.WriteLine("=== input");
+            try { Console.WriteLine("console input code page " + Console.InputEncoding.CodePage + " (mark of " + Console.InputEncoding.GetPreamble().Length + " bytes), Windows' own code page " + Encoding.Default.CodePage + " (mark of " + Encoding.Default.GetPreamble().Length + " bytes)"); }
+            catch (Exception ex) { Console.WriteLine("code pages couldn't be read: " + ex.Message); }
+            int lead = FFmpeg.StdinLead();
+            Console.WriteLine((lead >= 0 ? "PASS " : "FAIL ") + "bytes that reach FFmpeg ahead of the app's own: " + lead + (lead > 0 ? ", skipped with: " + FFmpeg.FedInputArgs().Trim() : lead == 0 ? " (nothing to skip)" : " (couldn't be lined up)"));
             var failed = new List<string>();
             bool only = args.Length > 0;
             Func<string, bool> wanted = name => !only || Array.IndexOf(args, name) >= 0;
+            if (lead < 0) failed.Add("input");
             if (wanted("hardware") && Hardware() != 0) failed.Add("hardware");
             if (wanted("compose") && RunTest("ComposeTest") != 0) failed.Add("compose");
             if (wanted("project") && RunTest("ProjectTest", work) != 0) failed.Add("project");

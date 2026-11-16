@@ -217,6 +217,119 @@ namespace StillsAndReels
 
         public static void AddToJob(Process p) { Job.Add(p); }
 
+        // ------------------------------------------------------------------ feeding raw data into FFmpeg's standard input
+        //
+        // The .NET Framework opens a child's standard input through a text writer, and when the code page in force
+        // is UTF-8 (a console set to UTF-8, or Windows' "use Unicode UTF-8" setting) that writer puts a byte-order
+        // mark into the pipe before anything the app writes. Three stray bytes in front of raw frames shift every
+        // pixel, and the export comes out as coloured noise. Nothing in the framework switches the mark off, so the
+        // number of stray bytes is measured once, by sending FFmpeg a known pattern and looking at what comes back,
+        // and FFmpeg is told to skip that many. Measured, not assumed: other runtimes write nothing.
+
+        /// <summary>Test hook: bytes written in front of everything fed to FFmpeg, standing in for what a runtime may add.</summary>
+        internal static byte[] TestStdinJunk;
+
+        static readonly object leadGate = new object();
+        static int stdinLead = int.MinValue;   // not measured yet
+
+        /// <summary>Starts FFmpeg with its standard input open for data (see FeedStream and FedInputArgs).</summary>
+        public static Process StartFed(string args)
+        {
+            var psi = new ProcessStartInfo(Locate(), args)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+            var p = Process.Start(psi);
+            Job.Add(p);
+            return p;
+        }
+
+        /// <summary>The stream to write raw data for a process started with StartFed.</summary>
+        public static Stream FeedStream(Process p)
+        {
+            var s = p.StandardInput.BaseStream;
+            var junk = TestStdinJunk;
+            if (junk != null && junk.Length > 0) s.Write(junk, 0, junk.Length);
+            return s;
+        }
+
+        /// <summary>Forgets the measurement (tests).</summary>
+        internal static void ForgetStdinLead() { lock (leadGate) stdinLead = int.MinValue; }
+
+        /// <summary>
+        /// How many bytes arrive in a fed process before the app's own (0 on a well-behaved runtime, 3 for a UTF-8
+        /// byte-order mark). −1 when stray bytes were found but skipping them couldn't be confirmed.
+        /// </summary>
+        public static int StdinLead()
+        {
+            lock (leadGate)
+            {
+                if (stdinLead != int.MinValue) return stdinLead;
+                int lead = MeasureLead(0);
+                if (lead > 0 && MeasureLead(lead) != 0) lead = -1;
+                // no answer at all (the probe couldn't run): carry on as if there were none, as every version before did
+                if (lead == int.MinValue) lead = 0;
+                stdinLead = lead;
+                return lead;
+            }
+        }
+
+        /// <summary>Input options that go in front of "-i pipe:0" for data written to FeedStream.</summary>
+        public static string FedInputArgs()
+        {
+            int lead = StdinLead();
+            if (lead < 0) throw new InvalidOperationException("The video engine's input couldn't be lined up on this PC, so the export was stopped rather than written wrongly.");
+            return lead == 0 ? "" : "-skip_initial_bytes " + lead.ToString(CultureInfo.InvariantCulture) + " ";
+        }
+
+        /// <summary>
+        /// Sends 48 known bytes as 16-pixel grey pictures and reads the first picture back: the position of the first
+        /// known byte in it is the number of bytes that got in ahead. int.MinValue when nothing came back; −1 when
+        /// the picture starts after the first known byte (too much was skipped).
+        /// </summary>
+        static int MeasureLead(int skip)
+        {
+            const int n = 16;
+            Process p = null;
+            try
+            {
+                p = StartFed("-hide_banner -loglevel error -f rawvideo -pix_fmt gray -s " + n + "x1 -framerate 1 " +
+                             (skip > 0 ? "-skip_initial_bytes " + skip.ToString(CultureInfo.InvariantCulture) + " " : "") +
+                             "-protocol_whitelist pipe -i pipe:0 -frames:v 1 -f rawvideo -pix_fmt gray pipe:1");
+                p.BeginErrorReadLine();
+                var pattern = new byte[n * 3];
+                for (int i = 0; i < pattern.Length; i++) pattern[i] = (byte)(0x40 + i);
+                try
+                {
+                    var input = FeedStream(p);
+                    input.Write(pattern, 0, pattern.Length);
+                    input.Flush();
+                    input.Close();
+                }
+                catch (IOException) { }   // FFmpeg has its picture and has gone
+                var got = new byte[n];
+                int off = 0;
+                var output = p.StandardOutput.BaseStream;
+                while (off < n)
+                {
+                    int r = output.Read(got, off, n - off);
+                    if (r <= 0) break;
+                    off += r;
+                }
+                if (off < n) return int.MinValue;
+                for (int i = 0; i < n - 1; i++)
+                    if (got[i] == 0x40 && got[i + 1] == 0x41) return i;
+                return -1;
+            }
+            catch { return int.MinValue; }
+            finally { KillQuietly(p); }
+        }
+
         /// <summary>Reads stream details (duration, size, frame rate, audio).</summary>
         public static MediaInfo Probe(string file)
         {

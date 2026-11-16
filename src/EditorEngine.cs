@@ -716,14 +716,7 @@ namespace StillsAndReels
 
         Process StartEncoder(string args, StringBuilder err)
         {
-            var psi = new ProcessStartInfo(FFmpeg.Locate(), args)
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-                WindowStyle = ProcessWindowStyle.Hidden,
-            };
-            var p = Process.Start(psi);
-            FFmpeg.AddToJob(p);
+            var p = FFmpeg.StartFed(args);
             p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (err) { if (err.Length < 8000) err.AppendLine(e.Data); } };
             p.BeginErrorReadLine();
             p.OutputDataReceived += (s, e) => { };
@@ -765,7 +758,7 @@ namespace StillsAndReels
             while (true)
             {
                 var sb = new StringBuilder("-hide_banner -loglevel error ");
-                sb.AppendFormat(inv, "-f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} -protocol_whitelist pipe -i pipe:0 ", w, h, fps);
+                sb.AppendFormat(inv, "-f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} {3}-protocol_whitelist pipe -i pipe:0 ", w, h, fps, FFmpeg.FedInputArgs());
                 if (hasSound) sb.Append("-protocol_whitelist file -i ").Append(FFmpeg.Quote(wav)).Append(' ');
                 sb.Append("-map 0:v:0 ");
                 if (hasSound) sb.Append("-map 1:a:0 ");
@@ -816,7 +809,7 @@ namespace StillsAndReels
             string palette = Path.Combine(MediaLibrary.Folder, "export-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {
-                string input = string.Format(inv, "-hide_banner -loglevel error -f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} -protocol_whitelist pipe -i pipe:0 ", w, h, fps);
+                string input = string.Format(inv, "-hide_banner -loglevel error -f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} {3}-protocol_whitelist pipe -i pipe:0 ", w, h, fps, FFmpeg.FedInputArgs());
                 proc = StartEncoder(input + "-vf palettegen=stats_mode=full -frames:v 1 -update 1 -y " + FFmpeg.Quote(palette), err);
                 RenderInto(proc, w, h, fps, duration, 0, 0.45, "Choosing colours, frame");
                 while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
@@ -836,7 +829,7 @@ namespace StillsAndReels
         /// <summary>Composes every frame of the exported part and pipes it to the encoder, then closes the pipe.</summary>
         void RenderInto(Process encoder, int w, int h, double fps, double duration, double progressFrom, double progressSpan, string label)
         {
-            var stdin = encoder.StandardInput.BaseStream;
+            var stdin = FFmpeg.FeedStream(encoder);
             long total = Math.Max(1, (long)Math.Ceiling(duration * fps - 1e-6));
             var comp = new Compositor(project, Media) { HighQuality = true };
             var sw = Stopwatch.StartNew();

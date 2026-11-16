@@ -125,6 +125,36 @@ static class ExportFormatsTest
         double h264 = Encoders.EstimateMb("mp4", false, 1920, 1080, 30, 18, 192, 60), hevc = Encoders.EstimateMb("hevc", false, 1920, 1080, 30, 18, 192, 60);
         Check(hevc < h264 && h264 > 20 && h264 < 400 && Math.Abs(Encoders.EstimateMb("wav", false, 0, 0, 0, 0, 0, 60) - 10.99) < 0.05, "size estimates: H.264 " + h264.ToString("0") + " MB, HEVC " + hevc.ToString("0") + " MB for a minute of 1080p");
 
+        // ---- stray bytes in front of the frames (what the .NET Framework does when the code page is UTF-8) are found and skipped
+        Check(FFmpeg.StdinLead() == 0 || FFmpeg.IsWindows, "nothing gets into the encoder's input ahead of the frames here (" + FFmpeg.StdinLead() + " bytes)");
+        foreach (int junk in new[] { 3, 2 })
+        {
+            FFmpeg.TestStdinJunk = junk == 3 ? new byte[] { 0xEF, 0xBB, 0xBF } : new byte[] { 0xFF, 0xFE };
+            FFmpeg.ForgetStdinLead();
+            try
+            {
+                int lead = FFmpeg.StdinLead();
+                string shifted = Path.Combine(work, "fmt-lead" + junk + ".mp4");
+                var sErr = Export(p, media, new ExportSettings { OutPath = shifted, Width = 640, Height = 360, Fps = 30, Crf = 18, Format = "mp4" }, out job);
+                double q = 0;
+                if (sErr == null)
+                    using (var got = FrameGrabber.Grab(shifted, 1.0, new Size(320, 180), ""))
+                    using (var want = FrameGrabber.Grab(video, 1.0, new Size(320, 180), ""))
+                        q = Psnr(got, want);
+                Check(lead >= junk && sErr == null && q > 28, junk + " stray bytes ahead of the frames are measured (" + lead + ") and skipped: the export matches the source (" + q.ToString("0.0") + " dB)" + (sErr != null ? ": " + sErr.Message : ""));
+                string sGif = Path.Combine(work, "fmt-lead" + junk + ".gif");
+                var gifErr = Export(p, media, new ExportSettings { OutPath = sGif, Width = 320, Height = 180, Fps = 10, Format = "gif" }, out job);
+                double gq = 0;
+                if (gifErr == null)
+                    using (var got = FrameGrabber.Grab(sGif, 0, new Size(320, 180), ""))
+                        foreach (double t in new[] { 0, 0.03, 0.06 })
+                            using (var want = FrameGrabber.Grab(video, t, new Size(320, 180), ""))
+                                gq = Math.Max(gq, Psnr(got, want));
+                Check(gifErr == null && gq > 26, "and so does a GIF (" + gq.ToString("0.0") + " dB)");
+            }
+            finally { FFmpeg.TestStdinJunk = null; FFmpeg.ForgetStdinLead(); }
+        }
+
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
     }
