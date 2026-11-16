@@ -37,6 +37,7 @@ namespace StillsAndReels
         public readonly Dictionary<string, string> TempoPcm = new Dictionary<string, string>(); // speed and sound work -> pcm file
         public readonly List<string> TempoOrder = new List<string>();   // the same keys, oldest first
         public readonly HashSet<string> TempoBusy = new HashSet<string>(); // being made right now
+        public readonly HashSet<string> TempoFailed = new HashSet<string>(); // couldn't be made: not tried again in the background
         public Bitmap Picture;            // decoded image (images only, at most 3840 px)
         public readonly object Sync = new object();
         public volatile bool Removed;     // set when taken out of the bin (background work stops)
@@ -244,6 +245,7 @@ namespace StillsAndReels
                 foreach (var p in m.TempoPcm.Values) ImageCache.Delete(p);
                 m.TempoPcm.Clear();
                 m.TempoOrder.Clear();
+                m.TempoFailed.Clear();
                 if (m.Thumb != null) { m.Thumb.Dispose(); m.Thumb = null; }
                 foreach (var kv in m.Strip) kv.Value.Dispose();
                 m.Strip.Clear();
@@ -579,7 +581,8 @@ namespace StillsAndReels
                 if (made == null) ImageCache.Delete(target);
                 lock (m.Sync)
                 {
-                    if (made != null) { m.TempoPcm[key] = made; m.TempoOrder.Remove(key); m.TempoOrder.Add(key); }
+                    if (made != null) { m.TempoPcm[key] = made; m.TempoOrder.Remove(key); m.TempoOrder.Add(key); m.TempoFailed.Remove(key); }
+                    else if (!m.Removed) m.TempoFailed.Add(key);
                     m.TempoBusy.Remove(key);
                     Monitor.PulseAll(m.Sync);
                 }
@@ -602,7 +605,7 @@ namespace StillsAndReels
             {
                 string have;
                 if (m.TempoPcm.TryGetValue(key, out have) && File.Exists(have)) return have;
-                if (!start || m.TempoBusy.Contains(key)) return null;
+                if (!start || m.TempoBusy.Contains(key) || m.TempoFailed.Contains(key)) return null;
             }
             ThreadPool.QueueUserWorkItem(_ => { try { PcmFor(m, speed, chain); } catch { } });
             return null;

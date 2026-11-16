@@ -1,6 +1,6 @@
-Stills & Reels 2.6 - source
+Stills & Reels 3.0 - source
 ===========================
-C# WinForms, .NET Framework 4.8. About 17,000 lines in src/. Built on Linux with Mono (mcs) and
+C# WinForms, .NET Framework 4.8. About 33,000 lines in src/. Built on Linux with Mono (mcs) and
 mingw windres; the result is a single Windows exe.
 
 Build
@@ -11,11 +11,22 @@ Build
   2. ./build.sh   -> build/StillsAndReels.exe
   Needs: mono-mcs (with the 4.8 reference assemblies, including Accessibility.dll) and mingw-w64 (windres).
 
+Test
+  tests/run.sh            builds, then runs the quick set (logic pickup picture compose project sound export
+                          formats scrub)
+  tests/run.sh all        adds the window tests (play close hide snip sniptools theme) and finish
+  tests/run.sh <name>...  only the named ones; "bench" times the renderer, "shots" writes screenshots of the
+                          editor to /tmp/sr-tests/shots
+  Needs: mono, Xvfb, openbox, a system ffmpeg (6.1 or newer, with libx264, libx265, libvpx-vp9, libopus,
+  libmp3lame), Python 3 with Pillow for the fixtures.
+
 Layout
   src/ExplorerWatcher.cs follows File Explorer windows and the desktop
   src/PickupWatcher.cs   follows clicks in other apps (pictures on web pages, files in Open/Save dialogs)
                          and the clipboard
-  src/MainForm.cs        main window, menus, modes (Pictures / Edit / Videos / Edit video), snips
+  src/MainForm.cs        main window, menus, modes (Pictures / Edit / Videos / Edit video), snips. A partial class:
+                         MainForm.Pictures.cs (picture Edit commands and keys) and MainForm.Viewer.cs (folder
+                         browsing, full screen, slideshow, details)
   src/Snip.cs            picture snip (with its delay timer)       src/VideoSnip.cs   screen recording
   src/JumpList.cs        taskbar jump list (Pic Snip / Vid Snip run the exe with --picsnip / --vidsnip),
                          written with the shell's ICustomDestinationList (declared in the file, no extra library);
@@ -23,13 +34,38 @@ Layout
   (VideoSnip.cs captures with ddagrab + hwdownload when a trial run succeeds, else gdigrab)
   src/PcSound.cs         PC sound for recordings (WASAPI loopback, streamed to FFmpeg over a named pipe;
                          the bundled FFmpeg has no loopback input of its own)
-  src/EditSession.cs, EditSidebar.cs, ImageCanvas*.cs   picture editing (paste layer etc.)
+  src/EditSession.cs, EditSidebar.cs, ImageCanvas*.cs   picture editing: the session, the Tools / Adjust / Layers
+                         sidebar, the canvas and its tools
+  src/PicSurface.cs      a picture as one block of pixels with ready-made smaller copies (fast painting)
+  src/PicDocument.cs, PicObjects.cs, PicSelection.cs   layers and tile-based undo; shapes, text and numbered steps
+                         as objects; selections
+  src/PicAdjust.cs, PicFilters.cs   adjustments, levels, curves, auto fix, looks, straighten, trim
+  src/PicProject.cs      the layered .srpic file        src/PicCodecs.cs   WebP, HEIC and the other FFmpeg-read
+                         formats, JPEG / WebP quality, photo details
+  src/PicDialogs.cs, PicIcons.cs   the picture dialogs and tool icons (Ico values from 1000)
   src/VideoView.cs, FFmpeg.cs   video playback and the bundled FFmpeg
   src/VideoQuality.cs     FFmpeg quality settings shared by recording, editor decode and export
                          (colour standard, scaling, lossless capture, final H.264 encode)
-  src/VideoProject.cs    project model (.srproj; older .ppvproj also opens)
-  src/MediaLibrary.cs, Compositor.cs, EditorEngine.cs, Timeline.cs, EditorPanels.cs,
-  src/VideoEditorView.cs, ExportDialog.cs   the video editor
+  src/VideoProject.cs    project model (.srproj; older .ppvproj also opens): tracks, clips, keyframes with motion
+                         curves, volume points, markers and the marked range, and the lists of looks, transitions,
+                         movements and animations. Saved with DataContract XML, where field initialisers do NOT
+                         run on load: every new field must mean "as before" at 0 / false / null, and null lists
+                         are put right in the [OnDeserialized] Fix methods. That is what keeps 2.6 projects opening.
+  src/Compositor.cs, Raster.cs   the renderer: decoders (StillFrames, StreamFrames) and composing frames on raw
+                         BGRA pixels across all cores (scaling, rotation, blend modes, masks, frames, blur,
+                         transitions, looks)
+  src/EditorEngine.cs    playback (EditorPlayback), the sound mixer (AudioMixer, Biquad: volume points, fades,
+                         bass / treble / voice filters, ducking) and export (ExportJob)
+  src/MediaLibrary.cs    imported media, thumbnails, waveforms, and prepared sound: the whole PCM of a file per
+                         speed and FFmpeg sound chain (noise reduction, pitch, loudness), made once in the
+                         background; playback never waits for it (PcmIfReady), export does (PcmFor)
+  src/Encoders.cs        export formats and their FFmpeg options; finds a working graphics-card encoder by
+                         trial-encoding a few frames (Windows only)
+  src/Reverse.cs         reversed copies of clips, made in memory-sized pieces
+  src/Recovery.cs        crash recovery copies (%LOCALAPPDATA%\StillsAndReels\Recovery\<process id>) and the
+                         recent projects list (%APPDATA%\StillsAndReels\recent-projects.txt)
+  src/Timeline.cs, EditorPanels.cs, VideoEditorView.cs, ExportDialog.cs   the editor's timeline, panels, main
+                         view and export window
   tests/                 logic.cs (regression test, loads the built exe by reflection),
                          CloseTest.cs (opens the snip windows and closes the app),
                          HideTest.cs (New snip hides only the Snip window, not the main window;
@@ -54,6 +90,15 @@ Layout
                          compiled together with src/*.cs: see the comment at the top of the file. Run it
                          on Xvfb :99 with 'pc', 'pc+mic', 'none' or 'pc+slow').
                          ThemeTest.cs (2.6: the three themes and the embedded app icon; run on Xvfb).
+                         New in 3.0, each compiled together with src/*.cs by tests/run.sh:
+                         PictureTest.cs (the picture engine, about 200 checks, no display needed),
+                         SnipToolsTest.cs (Snip capture modes and annotation tools; Xvfb),
+                         ComposeTest.cs (the video renderer pixel by pixel, including against the way 2.6 drew
+                         a clip, and tests/fixtures/project-2.6.srproj opening with every new setting off),
+                         ProjectTest.cs (motion curves, markers and range, recovery copy, recent projects),
+                         SoundTest.cs (mixer, prepared sound, reversing video and sound),
+                         ExportFormatsTest.cs (every export format, the marked range, GIF colours),
+                         Bench.cs (times the renderer) and UiShot.cs (screenshots of the editor).
                          TEST PLAN.md lists every test that must pass before a build is handed over.
 
 App icon: app.ico is compiled in twice, as the exe's icon (app.rc) and as the managed

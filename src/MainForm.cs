@@ -1570,7 +1570,7 @@ namespace StillsAndReels
         void ShowAbout()
         {
             MessageBox.Show(this,
-                AppName + " 2.6\n\n" +
+                AppName + " 3.0\n\n" +
                 "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
                 "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
                 "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +
@@ -1586,18 +1586,30 @@ namespace StillsAndReels
         {
             MessageBox.Show(this,
                 "Pictures\n" +
-                "  Ctrl + / Ctrl −   Zoom in / out\n  Ctrl+0   Fit to window\n  Ctrl+1   Actual size\n" +
-                "  Ctrl+E   Edit picture\n  Ctrl+Shift+N   Snip\n  Ctrl+V   Paste (as a movable layer)\n  Ctrl+Alt+V   Paste as a new picture\n" +
-                "  Ctrl+R / Ctrl+Shift+R   Rotate\n  Ctrl+Z / Ctrl+Y   Undo / redo\n  Ctrl+C   Copy\n  Ctrl+S   Save a copy\n" +
-                "  Space + drag   Move around while editing\n\n" +
+                "  ← / →   Previous / next picture in the folder    Home / End   First / last\n" +
+                "  F11   Full screen    F5   Slideshow    Ctrl+I   Picture details\n" +
+                "  Ctrl + / Ctrl −   Zoom in / out    Ctrl+0   Fit to window    Ctrl+1   Actual size\n" +
+                "  Ctrl+E   Edit picture    Ctrl+Shift+N   Snip    Ctrl+C   Copy    Ctrl+R / Ctrl+Shift+R   Rotate\n\n" +
+                "Edit picture\n" +
+                "  V   Select and move    M / L / W   Rectangle select / lasso / magic wand    C   Crop\n" +
+                "  P / H / E   Pen / highlighter / eraser    G / I   Fill / colour picker\n" +
+                "  A / R / O / T   Arrow / rectangle / oval / text    [ / ]   Smaller / bigger tool\n" +
+                "  Ctrl+A   Select all    Ctrl+Shift+A   Select nothing    Ctrl+Shift+I   Invert the selection\n" +
+                "  Ctrl+L   Levels    Ctrl+Shift+L   Auto fix    Ctrl+Alt+I   Resize    Ctrl+Alt+C   Canvas size\n" +
+                "  Ctrl+V   Paste as a layer    Ctrl+Alt+V   Paste as a new picture    Ctrl+D   Duplicate\n" +
+                "  Ctrl+Z / Ctrl+Y   Undo / redo    Ctrl+S   Save a copy    Space + drag   Move around\n\n" +
                 "Videos\n" +
                 "  Space or K   Play / pause\n  ← / →   Back / forward 5 s\n  J / L   Back / forward 10 s\n" +
+                "  , / .   One frame back / forward    R   Repeat    S   Save this frame\n" +
                 "  ↑ / ↓   Volume\n  M   Mute\n  F or F11   Full screen\n  Esc   Leave full screen\n\n" +
                 "Video editor\n" +
                 "  Space   Play / pause\n  ← / →   One frame   (Shift: one second)\n  ↑ / ↓   Previous / next cut\n" +
-                "  Ctrl+B   Split    Del   Delete    Shift+Del   Delete and close the gap\n" +
+                "  S or Ctrl+B   Split    Q / W   Trim the start / end to the playhead\n" +
+                "  Del   Delete    Shift+Del   Delete and close the gap\n" +
                 "  Ctrl+C / X / V   Copy / cut / paste    Ctrl+D   Duplicate\n" +
                 "  Ctrl+K   Keyframe    T   Add text    Ctrl+I   Import\n" +
+                "  I / O   Mark a range    Ctrl+Shift+X   Clear it    Shift+M   Marker\n" +
+                "  Shift + drag a clip's edge   Ripple trim    Shift + drag on empty timeline   Box select\n" +
                 "  Ctrl+S   Save project    Ctrl+M   Export    Ctrl+wheel   Zoom the timeline\n\n" +
                 "Modes\n  Alt+1   Pictures\n  Alt+2   Videos\n  Alt+3   Video editor\n  Ctrl+Shift+E   Edit video\n  Ctrl+Alt+R   Video snip\n  Ctrl+O   Open a file",
                 "Keyboard shortcuts", MessageBoxButtons.OK, MessageBoxIcon.None);

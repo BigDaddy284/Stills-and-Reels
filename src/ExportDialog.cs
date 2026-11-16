@@ -27,12 +27,51 @@ namespace StillsAndReels
         ExportJob job;
         bool finished;
 
-        // the choices of the last export in this session are offered again
+        // the choices of the last export are offered again, in this session and the next
         static string lastKind = "video", lastVideo = "mp4", lastSound = "mp3", lastQuality = "18";
-        static bool lastCard;
+        static bool lastCard, choicesRead;
+
+        static string ChoicesFile
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "StillsAndReels", "export-choices.txt"); }
+        }
+
+        static void ReadChoices()
+        {
+            if (choicesRead) return;
+            choicesRead = true;
+            try
+            {
+                if (!File.Exists(ChoicesFile)) return;
+                foreach (var line in File.ReadAllLines(ChoicesFile))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+                    string key = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
+                    // only values the window offers: anything else keeps the default
+                    if (key == "kind" && (v == "video" || v == "gif" || v == "sound")) lastKind = v;
+                    else if (key == "video" && Encoders.IsVideo(v)) lastVideo = v;
+                    else if (key == "sound" && Encoders.IsAudio(v)) lastSound = v;
+                    else if (key == "quality" && (v == "14" || v == "18" || v == "23" || v == "28")) lastQuality = v;
+                    else if (key == "card") lastCard = v == "1";
+                }
+            }
+            catch { }
+        }
+
+        static void WriteChoices()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ChoicesFile));
+                File.WriteAllLines(ChoicesFile, new[] { "kind=" + lastKind, "video=" + lastVideo, "sound=" + lastSound, "quality=" + lastQuality, "card=" + (lastCard ? "1" : "0") });
+            }
+            catch { }
+        }
 
         public ExportForm(Project p, Dictionary<int, MediaItem> media, string projectName, List<string> sources)
         {
+            ReadChoices();
             project = p;
             this.media = media;
             this.sources = sources;
@@ -394,6 +433,7 @@ namespace StillsAndReels
             };
             lastKind = kind.Selected; lastVideo = videoFormat.Selected; lastSound = soundFormat.Selected; lastQuality = quality.Selected;
             if (card.Enabled) lastCard = card.Checked;
+            WriteChoices();
             foreach (Control c in Inputs()) c.Enabled = false;
             go.Enabled = false;
             progress.Visible = stage.Visible = true;

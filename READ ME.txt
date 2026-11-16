@@ -1,4 +1,4 @@
-Stills & Reels 2.6
+Stills & Reels 3.0
 ==================
 (formerly Picture Preview)
 
@@ -7,7 +7,65 @@ Stills & Reels 2.6
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
 
-Graphite theme and a new icon (new in 2.6)
+New in 3.0: both editors rebuilt
+(The full list is in CHANGELOG.md with the source; the user guide is docs/GUIDE.md there.)
+
+Pictures and picture Edit
+- Big photos are much quicker: a 24-megapixel photo paints in about 15 ms (was about 700 ms).
+- Left and Right step through the folder in File Explorer's order. F11 is full screen, F5 a
+  slideshow, and Ctrl+I shows the picture's details (size, camera, lens, exposure, place).
+- Opens WebP, HEIC (phone photos), AVIF, TGA, PSD, JPEG 2000 and more, as well as PNG, JPEG,
+  GIF, BMP and TIFF. Saves PNG, JPEG and WebP (with a quality choice), BMP, GIF and TIFF.
+- The Edit sidebar has three tabs:
+  Tools   Select and move, rectangle / oval / lasso / magic wand selections, crop with presets,
+          pen, pencil, highlighter, eraser, fill, colour picker, line, arrow, rectangle, oval,
+          text, numbered steps, and Hide (pixelates or blurs something private for good).
+          Shapes and text stay editable after you draw them.
+  Adjust  Auto fix, looks, exposure, contrast, highlights, shadows, saturation, warmth,
+          sharpen, blur, vignette, levels, curves, resize, canvas size, straighten, trim edges.
+          Everything previews live and works inside a selection.
+  Layers  Show, hide, rename, reorder, opacity, ten blend modes, merge down, flatten.
+- "Save with layers" writes a .srpic file that reopens with every layer, shape and text box
+  still editable. It is the one file the app saves over, and it is the app's own.
+- Photo details (date, camera, place) are left out of saved copies unless you tick
+  "Keep photo details".
+- Undo goes back 200 steps within a memory budget, so long sessions don't run out of memory.
+
+Snip
+- Two more modes: Window (hover to light up a window, click to snip it) and Full screen.
+- A magnifier shows the exact pixel while you drag; arrow keys move one pixel at a time.
+- Mark-up tools on the Snip bar: arrow, box, text, numbered step and hide.
+
+Videos
+- , and . step one frame, R repeats, S saves the frame you're looking at as a picture, and
+  speeds run from 0.25x to 4x.
+
+Video editor
+- Faster: frames are composed on every processor core. Exporting the 1080p test clip takes
+  13.9 s instead of 35.5 s; blur is about 7 times faster.
+- Picture: blend modes, masks (oval, box, split), rounded corners, border, shadow, Fit, Fill,
+  blurred background, 30 transitions (was 13), 23 filters (was 11), glow, pixelate, colour
+  fringes, mirror, highlights and shadows.
+- Movement: ready-made movement (zoom, pan, float, shake...), arrive and leave animations for
+  clips and text (including typewriter), and motion curves for keyframes (smooth, overshoot,
+  bounce and more).
+- Sound: noise reduction, voice boost, even out the loudness, bass, treble, pitch, "Turn down
+  under other sound" (music drops while someone speaks), volume up to 400% with volume
+  keyframes, fade handles on the timeline, and a level meter under the preview.
+- Timing: speed from 0.1x to 16x, Play backwards, Q and W to trim to the playhead, S to split,
+  Shift while trimming to move everything after along.
+- Timeline: markers (Shift+M), a marked range (I and O) that can be exported on its own or
+  played round and round, box select (Shift or Ctrl and drag on empty timeline), and moving
+  several selected clips together.
+- Export: MP4 (H.264 or HEVC), WebM, animated GIF, MP3, M4A or WAV, with presets. If the PC's
+  graphics card has a video encoder (NVIDIA, Intel or AMD) the Export window offers it: much
+  faster, a slightly bigger file. Your choices are remembered.
+- Safety: an unsaved project is copied every 45 seconds to
+  %LOCALAPPDATA%\StillsAndReels\Recovery and offered back at the next start if the app or
+  the PC stopped unexpectedly. File > Recent video projects lists the last ten.
+- Projects saved by 2.6 open unchanged.
+
+Graphite theme and a new icon (2.6)
 - A third theme, Graphite: soft charcoal greys with a sky-blue accent. Pick it in View > Theme,
   in the ... menu at the top right, or in Settings > Appearance. Dark and Light are unchanged,
   and the app remembers your choice.
@@ -127,24 +185,27 @@ Video editor at a glance
   drag the round handle to rotate.
 - Right: properties of the selected clip (Basic, Adjust, Effects, Audio, Speed or Text).
 - Bottom: timeline. Drag clips to move them (also onto a new track), drag their ends to trim.
-  Space plays, Ctrl+B splits, Del deletes, Shift+Del deletes and closes the gap,
-  Ctrl+D duplicates, Ctrl+K adds a keyframe, Ctrl+wheel zooms, Ctrl+Z undoes.
+  Space plays, S or Ctrl+B splits, Q and W trim to the playhead, Del deletes, Shift+Del
+  deletes and closes the gap, Ctrl+D duplicates, Ctrl+K adds a keyframe, I and O mark a
+  range, Shift+M adds a marker, Ctrl+wheel zooms, Ctrl+Z undoes.
 - File > Save video project (Ctrl+S) saves a .srproj file. It remembers where your files are.
   Older .ppvproj projects also open.
-- Export (top right, or Ctrl+M): MP4 (H.264 + AAC) at the project's size or 480p-4K, at the
-  project's frame rate or 24-60 fps, or MP3 sound only.
+- Export (top right, or Ctrl+M): MP4 (H.264 or HEVC) or WebM at the project's size or
+  480p-4K, at the project's frame rate or 24-60 fps; animated GIF; or MP3, M4A or WAV sound
+  only. All of the project or just the marked range.
 
 The media cache
 - Every video you view (and every file you import) is copied into a private cache folder
   for the editor. Copies stay until you remove them from Media or close the app, then
   they are deleted. You can turn off keeping viewed videos in Settings.
-- Recordings, freeze frames and pasted pictures also live in the cache. When you save a
+- Recordings, freeze frames, reversed clips and pasted pictures also live in the cache. When you save a
   project, they are copied into a "<project name> media" folder next to it.
 
 Privacy
 - Pictures are read from a temporary copy that's deleted when you move on.
 - Edits, snips, recordings and exports are only ever saved as new files.
-  Originals are never changed or overwritten.
+  Originals are never changed or overwritten. The only files the app saves over are its
+  own: video projects and layered .srpic pictures.
 - Nothing is sent anywhere. The app has no network code.
 
 Video engine
@@ -162,7 +223,7 @@ CREDITS AND LICENCES
 
 Stills & Reels' own code
 ------------------------
-The application code (C#, about 17,000 lines) was written for you by Claude (Anthropic's
+The application code (C#, about 33,000 lines) was written for you by Claude (Anthropic's
 AI assistant) during this project. No source code, icons or other assets were copied from
 any other project, repository or product:
 - All icons in the interface are simple line drawings made in code.
@@ -174,7 +235,11 @@ any other project, repository or product:
   luma weights from ITU-R BT.709, the YCbCr conversion from ITU-R BT.601 (chroma key),
   saturation and hue-rotation matrices in the style of the W3C Filter Effects specification
   (feColorMatrix), the widely used sepia colour matrix, and textbook box blur, unsharp
-  mask and vignette techniques.
+  mask and vignette techniques; blend modes as defined in the W3C Compositing and Blending
+  specification.
+- The sound tools do the same: the bass, treble and voice filters are the standard biquad
+  formulas from Robert Bristow-Johnson's "Audio EQ Cookbook", and the overshoot and bounce
+  motion curves follow Robert Penner's published easing equations.
 
 
 1. Third-party software INCLUDED in StillsAndReels.exe
@@ -182,7 +247,9 @@ any other project, repository or product:
 
 FFmpeg 7.1 ("essentials" build for Windows 64-bit)
   What it does here: decodes and plays video and sound, makes thumbnails and waveforms,
-                     encodes exports, and records the screen.
+                     encodes exports, records the screen, cleans up sound (noise reduction,
+                     pitch, loudness), and reads picture formats Windows can't (WebP, HEIC,
+                     AVIF and others).
   Authors:           the FFmpeg developers - https://ffmpeg.org
   This build:        compiled by Gyan Doshi - https://www.gyan.dev/ffmpeg/builds/
                      (builds also published at https://github.com/GyanD/codexffmpeg)
@@ -248,8 +315,10 @@ FFmpeg 7.1 ("essentials" build for Windows 64-bit)
     AviSynth headers ...................... GPL v2 or later with linking exception
   The build also uses Windows and graphics-driver interfaces (Media Foundation, DXVA2,
   D3D11VA, D3D12VA, NVENC/NVDEC). These belong to Windows and the driver makers; their code is
-  not included. Stills & Reels only uses FFmpeg's own decoders and encoders, plus
-  x264, LAME, the AAC encoder, gdigrab and dshow.
+  not included. Stills & Reels uses FFmpeg's own decoders, filters and encoders (AAC, GIF),
+  x264, x265, libvpx (VP9), Opus, LAME, libwebp, gdigrab, ddagrab and dshow, and, only when
+  you switch on "Use the graphics card" in Export, the graphics driver's own encoder through
+  FFmpeg's NVENC, Quick Sync or AMF support.
 
   Patent notice: some formats (for example H.264, H.265, AAC and MP3 in some countries) may be
   covered by patents. These software licences are copyright licences only and don't grant

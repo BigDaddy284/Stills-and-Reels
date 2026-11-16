@@ -1,6 +1,101 @@
 # Changelog
 
-## 2.6 (current)
+## 3.0 (current)
+
+The biggest release so far: both editors were rebuilt for speed and given several times as many tools. Projects saved by 2.6 open unchanged, and originals are still never modified.
+
+### Video editor: speed
+
+- **New renderer.** Frames are now composed on raw pixels across every processor core instead of through GDI+ on one. Exporting the 20-second 1080p test clip takes 13.9 s instead of 35.5 s on the build machine, and the preview has more headroom for layers and effects.
+- **Faster effects.** Blur is about 7 times faster; rotation and sharp scaling about twice as fast.
+- **Graphics-card encoding.** Export can use the PC's NVIDIA, Intel or AMD encoder for H.264 and HEVC, several times faster than the processor for a somewhat bigger file. The app checks which one really works on the PC by encoding a few frames, and if the card's encoder fails mid-export it starts again on the processor without asking.
+
+### Video editor: picture
+
+- **Blend modes** for any clip: Screen, Multiply, Overlay, Soft light, Hard light, Add, Darken, Lighten and Difference.
+- **Masks:** Oval, Box and Split, with a soft edge, or turned inside out to show the outside instead.
+- **Frame:** rounded corners, a border in any colour, and a drop shadow.
+- **Fit, Fill and Blurred background** for clips that don't match the canvas shape (a phone video on a wide canvas gets a blurred copy of itself behind it), and **Crop**.
+- **Transitions: 13 to 30.** New: Blur, Soft wipe left and right, Diagonal wipe, Cover (four directions), Diamond, Clock, Doors, Shutters, Blinds, Zoom out, Spin, Pixelate and Glitch.
+- **Filters: 11 to 23.** New: Teal & orange, Golden hour, Sunset, Arctic, Forest, Rose, Pastel, Matte, Bleach, Punch, Technicolor and Night, each with a strength slider.
+- **Effects:** Glow, Pixelate, Colour fringes and Mirror join Blur, Sharpen, Vignette, Film grain, Chroma key and Stabilise. Adjust gains **Highlights** and **Shadows**.
+- **Movement** that needs no keyframes: Slow zoom in and out, Pan (four directions), Float, Swing, Pulse, Shake and Spin, with a strength slider.
+- **Arrive and leave animations** for clips and text: Fade, Slide (four directions), Pop, Grow, Shrink, Spin, Drop, and Typewriter for text, each with its own length.
+- **Motion curves.** Each keyframe can be reached Straight, Smooth, with a Slow start or Slow finish, Stay then jump, Overshoot or Bounce (the **Motion** button under the keyframe buttons).
+
+### Video editor: sound
+
+- **Clean up:** Noise reduction (a slider), Voice boost for clearer speech, and Even out the loudness.
+- **Tone:** Bass, Treble and Pitch (up or down an octave without changing the speed).
+- **Mixing:** "Turn down under other sound" lowers music automatically while speech plays on another clip, with a slider for how far.
+- **Volume up to 400%, with volume keyframes.** The keyframe button beside Volume sets a point at the playhead; the line and its points are drawn on the clip's waveform.
+- **Fade handles** on the timeline: drag the small handles at the top corners of a selected clip to fade its sound and picture in or out.
+- **Level meter** under the preview, showing left and right as the project plays.
+- Noise reduction, pitch and even loudness are prepared once in the background and kept; playback never waits for them (the clip plays as it was until the cleaned-up sound is ready), and export always uses the finished version.
+
+### Video editor: timing
+
+- **Speed from 0.1× to 16×** (it stopped at 4×), on a slider that gives slow and fast speeds equal room. Keyframes and volume points stay on the same pictures when the speed changes.
+- **Play backwards.** A clip, or just the part used, is written out reversed once (video in pieces small enough for memory, joined last to first; sound turned round to match) and then behaves like any other clip.
+- **Trim to the playhead:** **Q** cuts the start of the selected clip to the playhead and **W** the end. **S** splits, as well as Ctrl+B.
+- **Ripple trim:** hold Shift while dragging a clip's edge and everything after it moves along.
+
+### Video editor: timeline and projects
+
+- **Markers** (Shift+M, or right-click the ruler): named flags on the ruler that clips and the playhead snap to.
+- **Marked range** (I and O): a band on the ruler. Export can write just that part, and "Play the range round and round" in the ruler's menu repeats it during playback.
+- **Box select and group move.** Shift or Ctrl and drag across empty timeline to select every clip the box touches; dragging one of several selected clips moves them all.
+- **Crash recovery.** While a project has unsaved changes a copy is kept every 45 seconds, together with the recordings, freeze frames and reversed clips that only live in the cache. If the app or the PC stops unexpectedly, the next start offers the project back.
+- **Recent projects** in File > Recent video projects and on the empty editor's start panel.
+
+### Export
+
+- **New formats:** HEVC (H.265) in MP4, WebM (VP9 with Opus), animated GIF (with a palette made for the video, at 240 to 720 px wide and 10 to 25 frames a second), and sound only as MP3, M4A (AAC) or WAV.
+- **Presets** for common uses: YouTube and TV, phones and social apps, small for email, smallest that still looks good, websites, GIFs and sound only.
+- **Export part of the project** when a range is marked.
+- The window shows an estimate of the file size, says which encoder was used when it finishes, and remembers your choices for next time.
+
+### Videos mode
+
+- **Frame by frame** with , and . when paused, **Repeat** (R), **Save this frame as a picture** (S), and playback speeds from 0.25× to 4×.
+
+### Pictures and picture Edit
+
+- **Much faster on big photos.** A 24-megapixel photo paints in about 15 ms fitted to the window (was about 700 ms) and about 12 ms at 100% (was about 550 ms). Going into Edit takes about 50 ms (was 150 ms), rotating is twice as fast, and saving a flat copy prepares four times as fast.
+- **Undo that doesn't run out of memory.** Lines, shapes and text are kept as objects and cost nothing to undo; pixel changes keep only the 256-pixel tiles they touched. Undo holds 200 steps within a memory budget (a quarter of the PC's memory, between 512 MB and 2 GB).
+- **The Edit sidebar has three tabs: Tools, Adjust and Layers.**
+- **Tools:** Select and move (V) for anything you've added; selections with Rectangle select (M), Oval select, Lasso (L) and Magic wand (W), where Shift adds and Alt takes away, plus All, None, Invert, Crop to, Soften, Clear, Copy and Cut; Crop (C) with presets (Free, Original, 1:1, 4:3, 3:2, 16:9, 3:4, 9:16); Pen (P), Pencil, Highlighter (H) and Eraser (E); Fill (G) and Colour picker (I); Line, Arrow (A), Rectangle (R), Rounded rectangle and Oval (O) with outline, thickness and optional fill; Text (T) with font, size, bold, italic, colour and an optional background; Numbered step; Hide, which pixelates or blurs something private for good; and Hand. [ and ] change the size of the current tool.
+- **Adjust,** with a live preview and Apply or Reset, inside the selection if there is one: Auto fix (Ctrl+Shift+L); Looks (Black and white, Sepia, Vivid, Warm, Cool, Faded, Dramatic, Soft focus, Sharpen, Vignette, Invert colours); Exposure, Brightness, Contrast, Highlights, Shadows, Saturation, Vibrance, Warmth, Tint, Sharpen, Blur and Vignette; Levels (Ctrl+L) and Curves with a histogram; Resize (Ctrl+Alt+I), Canvas size (Ctrl+Alt+C), Straighten to any angle and Trim edges.
+- **Layers:** a list with show and hide, thumbnail, name, Opacity and Blend (Normal, Multiply, Screen, Overlay, Soft light, Hard light, Darken, Lighten, Difference, Add); add, duplicate, reorder, delete, Merge down and Flatten. A paste arrives as its own layer.
+- **Save with layers** writes a `.srpic` file that keeps every layer, shape and text box editable. Opening one shows it like any picture, going into Edit brings the layers back, and Ctrl+S then saves straight back into it. It is the one file the app ever saves over.
+- **A Picture menu** with the adjustments and layer commands, and selection commands in the Edit menu.
+- **More formats.** Opens WebP, HEIC and HEIF, AVIF, TGA, PSD, JPEG 2000, DDS, QOI, PCX, EXR, HDR and the PPM family through the built-in engine (local files only), also as media in the video editor. Phone HEIC photos stored as tile grids are put back together the right way up. Saves PNG, JPEG, WebP, BMP, GIF, TIFF and `.srpic`.
+- **Save options.** JPEG and WebP ask for a quality (JPEG shows a live guess of the file size; WebP can keep every pixel exact). Photo details (date, camera, place) are left out of saved copies unless you tick **Keep photo details**; when kept, the small preview picture inside the details is wiped so nothing you hid can show through.
+
+### Viewer
+
+- **Step through the folder** with Left and Right (or Page Up and Page Down), Home and End, in File Explorer's name order. The next picture is read ahead, and the status bar shows the place in the folder ("3 of 57").
+- **Full screen** (F11), **Slideshow** (F5; Space pauses, Esc stops; 2 to 20 seconds a picture in View > Slideshow speed) and **Picture details** (Ctrl+I): size, megapixels, file size, date, and for camera photos the camera, lens, exposure and place, with a histogram.
+
+### Snip
+
+- **Window** mode (hover to light up a window, click to snip it) and **Full screen** mode (the whole of the screen the pointer is on, straight away), next to Rectangle and Freeform.
+- A **magnifier** on rectangle snips shows the exact pixel and its position; the arrow keys move the pointer one pixel (Shift: ten).
+- **Annotation tools** on the Snip bar: Select, Arrow, Box, Text, Numbered step and Hide, alongside Pen, Highlighter and Eraser.
+- A snip can be saved as WebP, or with its layers so arrows and text stay editable.
+
+### Fixes
+
+- The status bar no longer gets switched off for the next start when the app is closed from a snip-only start or while the main window is hidden.
+
+### Known limits in 3.0
+
+- A reversed clip of a video with transparency loses the transparency, and a video with an uneven frame rate is reversed at a steady one.
+- Graphics-card encoding, HEIC photos from a phone and the recovery prompt could only be checked on Windows by hand (see the Windows checks that come with the build).
+- In picture Edit, selections aren't part of undo, and Straighten turns shapes and text into pixels. Camera raw files, SVG, JPEG XL and animated WebP aren't opened.
+- There are still no automatic captions, and Stabilise applies in playback and export only.
+
+## 2.6
 
 - **Graphite theme.** A third theme alongside Dark and Light: soft charcoal greys with a sky-blue accent (the Graphite theme's own colours: bar #1b1c1f, window #2a2b2f, panels #222327, accent #2580ee to #8cc4ff). Choose it in View > Theme, the ⋯ menu or Settings > Appearance; the choice is saved as . Surfaces that were fixed navy colours in the code (timeline, tracks, preview surround, effect tiles, text boxes, media thumbnails, timeline tooltips, the snip bars, countdown and badges, the Windows 11 window border) now come from the theme, so Graphite is grey throughout. In Dark and Light they look exactly as before.
 - **New app icon** in the Sky Classic style: a glowing sky-blue frame with a camera and a play mark side by side in the middle on a dark tile. The .ico holds 16, 20, 24, 32, 40, 48, 64 and 256 px images, with a simplified, bolder drawing for 16 to 24 px so it stays sharp in title bars. It is the exe's icon and is also embedded as a resource, and every window uses it: the main window, Snip, Video snip, Settings and Export (Settings and Export used to show the default Windows icon).

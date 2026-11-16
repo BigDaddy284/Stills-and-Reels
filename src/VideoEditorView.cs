@@ -501,10 +501,15 @@ namespace StillsAndReels
             if (IsPlaying) return;
             if (project.IsEmpty) { Say("Add something to the timeline first"); return; }
             if (playhead >= project.Duration - 0.04) playhead = 0;
+            if (RepeatsRange && (playhead < project.MarkIn || playhead >= project.MarkOut - 0.04)) playhead = project.MarkIn;
             string waiting;
             if (!Library.AudioReady(project, out waiting, true)) Say("The sound of " + waiting + " is still being prepared – it plays silently until it's ready");
             StartPlayback();
         }
+
+        /// <summary>Playback goes round the marked range instead of running on (chosen in the ruler's menu; not saved).</summary>
+        bool repeatRange;
+        bool RepeatsRange { get { return repeatRange && project.HasRange; } }
 
         public void Pause()
         {
@@ -529,6 +534,7 @@ namespace StillsAndReels
             {
                 if (!ReferenceEquals(playback, pb)) return;
                 StopPlayback();
+                if (RepeatsRange) { playhead = project.MarkIn; StartPlayback(); return; }
                 playhead = project.Duration;
                 Timeline.Invalidate();
                 bar.Sync();
@@ -582,6 +588,12 @@ namespace StillsAndReels
                 if (Library.AudioReady(project, out waiting, true)) { restartTimer.Stop(); restartTimer.Start(); }
             }
             playhead = playback.Position;
+            if (RepeatsRange && playhead >= project.MarkOut - project.FrameDuration * 0.5)
+            {
+                StopPlayback();
+                playhead = project.MarkIn;
+                StartPlayback();
+            }
             Timeline.Follow(playhead);
             bar.Invalidate();
             // see Scrub: a moving mouse over the window would otherwise hold these repaints back
@@ -1140,6 +1152,11 @@ namespace StillsAndReels
             menu.Items.Add(new ToolStripMenuItem("Start the range here", null, (s, e) => { Scrub(project.Snap(t)); SetMark(true); }) { ShortcutKeyDisplayString = "I" });
             menu.Items.Add(new ToolStripMenuItem("End the range here", null, (s, e) => { Scrub(project.Snap(t)); SetMark(false); }) { ShortcutKeyDisplayString = "O" });
             menu.Items.Add(new ToolStripMenuItem("Clear the range", null, (s, e) => ClearMarks()) { Enabled = project.HasRange, ShortcutKeyDisplayString = "Ctrl+Shift+X" });
+            menu.Items.Add(new ToolStripMenuItem("Play the range round and round", null, (s, e) =>
+            {
+                repeatRange = !repeatRange;
+                Say(repeatRange ? (project.HasRange ? "Playback repeats the marked range" : "Playback will repeat the range once you mark one (I and O)") : "Playback runs on past the range");
+            }) { Checked = repeatRange });
             Theme.StyleMenu(menu);
             menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
             menu.Show(screen);

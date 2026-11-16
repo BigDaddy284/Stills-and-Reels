@@ -68,8 +68,9 @@ namespace StillsAndReels
                     return string.Format(Inv, "-vf \"{0}\" -c:v {1} -preset medium -global_quality {2} -pix_fmt nv12 {3}",
                         filter.Replace("format=yuv420p", "format=nv12"), hevc ? "hevc_qsv" : "h264_qsv", crf + (hevc ? 5 : 3), hevc ? "-tag:v hvc1 " : "") + tags;
                 case "amf":
-                    return string.Format(Inv, "-vf \"{0}\" -c:v {1} -quality quality -rc cqp -qp_i {2} -qp_p {3} -qp_b {4} -pix_fmt yuv420p {5}",
-                        filter, hevc ? "hevc_amf" : "h264_amf", crf + 2, crf + 4, crf + 6, hevc ? "-tag:v hvc1 " : "") + tags;
+                    // AMD's HEVC encoder has no B-frames, so no quantiser for them
+                    return string.Format(Inv, "-vf \"{0}\" -c:v {1} -quality quality -rc cqp -qp_i {2} -qp_p {3} {4}-pix_fmt yuv420p {5}",
+                        filter, hevc ? "hevc_amf" : "h264_amf", crf + 2, crf + 4, hevc ? "" : "-qp_b " + (crf + 6) + " ", hevc ? "-tag:v hvc1 " : "") + tags;
             }
             if (hevc)
                 return string.Format(Inv, "-vf \"{0}\" -c:v libx265 -preset {1} -crf {2} -pix_fmt yuv420p -tag:v hvc1 -x265-params log-level=error ", filter, preset, crf + 4) + tags;
@@ -103,7 +104,8 @@ namespace StillsAndReels
 
         // ------------------------------------------------------------------ what this PC's graphics card can do
 
-        static readonly object gate = new object();
+        static readonly object gate = new object();      // guards the answers
+        static readonly object probing = new object();   // one probe at a time; never held while the window asks for an answer
         static readonly Dictionary<string, string> found = new Dictionary<string, string>();
 
         /// <summary>The detected hardware encoder for a format if Detect has already run for it; null when none or not yet known.</summary>
@@ -119,15 +121,15 @@ namespace StillsAndReels
         public static string Detect(string format)
         {
             if (format != "mp4" && format != "hevc") return null;
-            lock (gate)
+            lock (probing)
             {
                 string hw;
-                if (found.TryGetValue(format, out hw)) return hw;
+                lock (gate) if (found.TryGetValue(format, out hw)) return hw;
                 hw = null;
                 if (FFmpeg.IsWindows)
                     foreach (var candidate in new[] { "nvenc", "qsv", "amf" })
                         if (Works(format, candidate)) { hw = candidate; break; }
-                found[format] = hw;
+                lock (gate) found[format] = hw;
                 return hw;
             }
         }
