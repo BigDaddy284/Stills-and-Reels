@@ -432,6 +432,7 @@ namespace StillsAndReels
             help.DropDownItems.Add(Item("&About " + AppName.Replace("&", "&&"), Keys.None, (s, e) => ShowAbout()));
 
             AddPictureMenus(file, editMenu, view);
+            AddViewerMenus(view);
             menu.Items.AddRange(new ToolStripItem[] { file, editMenu, miImage, view, help });
             foreach (ToolStripMenuItem top in menu.Items)
             {
@@ -819,6 +820,7 @@ namespace StillsAndReels
 
         void StartEditSession()
         {
+            DropAhead();
             edit = OpenLayers(current);
             if (edit == null) edit = current.Surface != null ? new EditSession(current.Surface.Clone(), current.SourcePath, false) : new EditSession(current.Image, current.SourcePath);
             edit.Changed += (s, e) => OnPictureEditChanged();
@@ -955,6 +957,8 @@ namespace StillsAndReels
             if (p == null) return;
             loading = true;
             int gen = generation;
+            var ready = TakeAhead(p);
+            if (ready != null) { OnLoaded(gen, p, ready, null); return; }   // read ahead while the last picture was up
             Flash("Loading " + Path.GetFileName(p) + "…", true);
             ThreadPool.QueueUserWorkItem(_ =>
             {
@@ -1011,6 +1015,7 @@ namespace StillsAndReels
                 StartEditSession();
                 SelectTool(tool == EditTool.Crop ? lastDrawingTool : tool);
             }
+            AfterPictureShown();
             UpdateUi();
         }
 
@@ -1239,7 +1244,7 @@ namespace StillsAndReels
 
         void ToggleFullscreen()
         {
-            if (mode != AppMode.Videos && !fullscreen) return;
+            if (mode != AppMode.Videos && mode != AppMode.Pictures && !fullscreen) return;
             if (!fullscreen)
             {
                 prevBorder = FormBorderStyle;
@@ -1619,6 +1624,7 @@ namespace StillsAndReels
             // let text boxes (e.g. the words of a text clip) handle their own editing keys
             if (TextBoxFocused() && IsTextKey(keyData)) return false;
             if (PictureKey(keyData)) return true;
+            if (ViewerKey(keyData)) return true;
             if (mode == AppMode.VideoEdit && !IsMenuOpen())
             {
                 switch (keyData)
@@ -1812,6 +1818,7 @@ namespace StillsAndReels
                     else if (current != null) left += "    " + current.Image.Width + " × " + current.Image.Height;
                     if (current != null) left += "    " + FormatSize(current.FileSize);
                     if (canvas.HasContent) left += "    " + Math.Round(canvas.Zoom * 100) + "%";
+                    left += ViewerStatus();
                 }
             }
             statusBar.LeftText = left;

@@ -673,4 +673,46 @@ namespace StillsAndReels
             base.Dispose(disposing);
         }
     }
+
+    /// <summary>What is known about the picture on screen: file facts, photo details and a histogram.</summary>
+    internal sealed class DetailsDialog : PicDialog
+    {
+        public DetailsDialog(IList<KeyValuePair<string, string>> facts, IList<KeyValuePair<string, string>> photo, PicHistogram hist)
+            : base("Picture details", 460)
+        {
+            Rows(facts);
+            if (photo != null && photo.Count > 0)
+            {
+                Y += Theme.S(6);
+                Section("Photo details");
+                Rows(photo);
+            }
+            if (hist != null && hist.Count > 0)
+            {
+                Y += Theme.S(6);
+                Section("Light and colour");
+                var view = new HistogramView { Data = hist };
+                Place(view, Theme.S(96));
+            }
+            Finish("Close");
+            CancelButton2.Visible = false;
+            Ok.Left = CancelButton2.Left;
+        }
+
+        void Rows(IList<KeyValuePair<string, string>> rows)
+        {
+            int nameW = Theme.S(120);
+            foreach (var r in rows)
+            {
+                var name = Caption(r.Key, Pad, Y, nameW);
+                name.ForeColor = Theme.Current.Muted;
+                name.Height = Theme.S(24);
+                var value = Caption(r.Value, Pad + nameW, Y, Inner - nameW);
+                value.Height = Theme.S(24);
+                value.AutoEllipsis = true;
+                Ui.Tip.SetToolTip(value, r.Value);
+                Y += Theme.S(24);
+            }
+        }
+    }
 }

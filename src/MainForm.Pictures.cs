@@ -854,7 +854,8 @@ namespace StillsAndReels
             miDuplicateObj.Enabled = editing && canvas.SelectedObject != null;
             miImage.Visible = pictures;
             foreach (ToolStripItem it in miImage.DropDownItems) it.Enabled = has;
-            foreach (ToolStripItem it in miLayerMenu.DropDownItems) it.Enabled = editing || (has && it.Text.Contains("New"));
+            foreach (ToolStripItem it in miLayerMenu.DropDownItems) it.Enabled = editing || (has && (it.Text.Contains("New") || it.Text.Contains("Save")));
+            UpdateViewerMenus();
         }
     }
 }

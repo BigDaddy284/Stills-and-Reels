@@ -373,6 +373,129 @@ namespace StillsAndReels
             else if (type == 4) w32(entry + 8, value);
         }
 
+        // ------------------------------------------------------------------ reading details for the details box
+
+        sealed class Tag { public int Type; public long Count; public int At; }
+
+        static Dictionary<int, Tag> ReadList(byte[] d, int tiff, long offset, Func<int, int> u16, Func<int, long> u32)
+        {
+            var tags = new Dictionary<int, Tag>();
+            if (offset < 8 || tiff + offset + 2 > d.Length) return tags;
+            int at = tiff + (int)offset;
+            int n = u16(at);
+            int[] sizes = { 0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8 };
+            for (int k = 0; k < n; k++)
+            {
+                int e = at + 2 + k * 12;
+                if (e + 12 > d.Length) break;
+                int type = u16(e + 2);
+                long count = u32(e + 4);
+                if (type < 1 || type > 12 || count < 0 || count > 65536) continue;
+                long bytes = sizes[type] * count;
+                long where = bytes <= 4 ? e + 8 : tiff + u32(e + 8);
+                if (where < 0 || where + bytes > d.Length) continue;
+                tags[u16(e)] = new Tag { Type = type, Count = count, At = (int)where };
+            }
+            return tags;
+        }
+
+        static string Text(byte[] d, Dictionary<int, Tag> tags, int id)
+        {
+            Tag t;
+            if (!tags.TryGetValue(id, out t) || t.Type != 2) return null;
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < t.Count; i++)
+            {
+                char c = (char)d[t.At + i];
+                if (c == 0) break;
+                if (c >= 32 && c < 127) sb.Append(c);
+            }
+            string s = sb.ToString().Trim();
+            return s.Length == 0 ? null : s;
+        }
+
+        /// <summary>
+        /// The photo details worth showing, in plain words: camera, lens, when it was taken, the exposure, and the
+        /// place if the camera recorded one. An empty list when there are none.
+        /// </summary>
+        public static List<KeyValuePair<string, string>> Describe(byte[] segment)
+        {
+            var rows = new List<KeyValuePair<string, string>>();
+            try
+            {
+                byte[] d = segment;
+                const int tiff = 10;
+                if (d == null || d.Length < tiff + 8) return rows;
+                bool le;
+                if (d[tiff] == 'I' && d[tiff + 1] == 'I') le = true;
+                else if (d[tiff] == 'M' && d[tiff + 1] == 'M') le = false;
+                else return rows;
+                Func<int, int> u16 = p => le ? d[p] | (d[p + 1] << 8) : (d[p] << 8) | d[p + 1];
+                Func<int, long> u32 = p => le ? (uint)(d[p] | (d[p + 1] << 8) | (d[p + 2] << 16) | (d[p + 3] << 24))
+                                              : (uint)((d[p] << 24) | (d[p + 1] << 16) | (d[p + 2] << 8) | d[p + 3]);
+                Func<Tag, int, double> rational = (tg, i) =>
+                {
+                    long a = u32(tg.At + i * 8), b = u32(tg.At + i * 8 + 4);
+                    if (tg.Type == 10) { a = (int)a; b = (int)b; }
+                    return b == 0 ? 0 : a / (double)b;
+                };
+                Action<string, string> add = (k, v) => { if (!string.IsNullOrEmpty(v)) rows.Add(new KeyValuePair<string, string>(k, v)); };
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+                var main = ReadList(d, tiff, u32(tiff + 4), u16, u32);
+                Tag link;
+                var exif = main.TryGetValue(0x8769, out link) && link.Type == 4 ? ReadList(d, tiff, u32(link.At), u16, u32) : new Dictionary<int, Tag>();
+                var gps = main.TryGetValue(0x8825, out link) && link.Type == 4 ? ReadList(d, tiff, u32(link.At), u16, u32) : new Dictionary<int, Tag>();
+
+                string make = Text(d, main, 0x010F), model = Text(d, main, 0x0110);
+                if (make != null && model != null && model.StartsWith(make, StringComparison.OrdinalIgnoreCase)) make = null;
+                add("Camera", ((make ?? "") + " " + (model ?? "")).Trim());
+                add("Lens", Text(d, exif, 0xA434));
+                string when = Text(d, exif, 0x9003) ?? Text(d, main, 0x0132);
+                if (when != null)
+                {
+                    DateTime dt;
+                    if (DateTime.TryParseExact(when, "yyyy:MM:dd HH:mm:ss", inv, System.Globalization.DateTimeStyles.None, out dt)) when = dt.ToString("d MMMM yyyy, HH:mm");
+                    add("Taken", when);
+                }
+                var parts = new List<string>();
+                Tag t;
+                if (exif.TryGetValue(0x829A, out t) && (t.Type == 5 || t.Type == 10))
+                {
+                    double sec = rational(t, 0);
+                    if (sec > 0) parts.Add(sec >= 0.4 ? sec.ToString("0.#", inv) + " s" : "1/" + Math.Round(1 / sec).ToString(inv) + " s");
+                }
+                if (exif.TryGetValue(0x829D, out t) && (t.Type == 5 || t.Type == 10))
+                {
+                    double f = rational(t, 0);
+                    if (f > 0) parts.Add("f/" + f.ToString("0.#", inv));
+                }
+                if (exif.TryGetValue(0x8827, out t) && (t.Type == 3 || t.Type == 4))
+                {
+                    long iso = t.Type == 3 ? u16(t.At) : u32(t.At);
+                    if (iso > 0) parts.Add("ISO " + iso.ToString(inv));
+                }
+                if (exif.TryGetValue(0x920A, out t) && (t.Type == 5 || t.Type == 10))
+                {
+                    double mm = rational(t, 0);
+                    if (mm > 0) parts.Add(mm.ToString("0.#", inv) + " mm");
+                }
+                add("Exposure", string.Join("   ", parts.ToArray()));
+
+                Tag lat, lon;
+                if (gps.TryGetValue(2, out lat) && gps.TryGetValue(4, out lon) && lat.Type == 5 && lon.Type == 5 && lat.Count >= 3 && lon.Count >= 3)
+                {
+                    double la = rational(lat, 0) + rational(lat, 1) / 60 + rational(lat, 2) / 3600;
+                    double lo = rational(lon, 0) + rational(lon, 1) / 60 + rational(lon, 2) / 3600;
+                    string ns = Text(d, gps, 1) ?? "N", ew = Text(d, gps, 3) ?? "E";
+                    if (la != 0 || lo != 0)
+                        add("Place", la.ToString("0.0000", inv) + "° " + ns + ",  " + lo.ToString("0.0000", inv) + "° " + ew + "   (stored in this file)");
+                }
+            }
+            catch { }
+            return rows;
+        }
+
         /// <summary>Puts an EXIF segment into a JPEG that has none, right after its opening (and its JFIF block).</summary>
         public static byte[] Insert(byte[] jpeg, byte[] segment)
         {

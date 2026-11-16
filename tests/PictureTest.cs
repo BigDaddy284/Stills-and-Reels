@@ -750,6 +750,15 @@ static class PictureTest
         }
         Check(JpegDetails.Clean(new byte[] { 0xFF, 0xE1, 0, 20, (byte)'E', (byte)'x', (byte)'i', (byte)'f', 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }) == null, "details that can't be understood are left out, not guessed at");
         Check(JpegDetails.Read(new byte[] { 1, 2, 3 }) == null && JpegDetails.Read(null) == null, "a file that is not a JPEG has no details");
+        {
+            int ta, tl;
+            var rows = JpegDetails.Describe(MakeExif(out ta, out tl));
+            Check(rows.Count == 1 && rows[0].Key == "Camera" && rows[0].Value == "TestCam", "the details box reads the camera name");
+            Check(JpegDetails.Describe(null).Count == 0 && JpegDetails.Describe(new byte[40]).Count == 0, "no details gives an empty list, not an error");
+        }
+        Check(MainForm.NaturalCompare("img2.png", "img10.jpg") < 0 && MainForm.NaturalCompare("IMG3.bmp", "img10.jpg") < 0 && MainForm.NaturalCompare("a.png", "B.png") < 0 &&
+              MainForm.NaturalCompare("x07.png", "x7.png") != 0 && MainForm.NaturalCompare("same.png", "same.png") == 0 && MainForm.NaturalCompare("b", "a10") > 0,
+              "pictures in a folder are stepped through in the order File Explorer shows them");
 
         // a format Windows can't read by itself (PPM), through FFmpeg
         string ppm = F("pt-small.ppm");
