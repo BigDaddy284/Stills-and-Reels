@@ -253,7 +253,7 @@ namespace StillsAndReels
                 var pic = new RectangleF(b.Left, b.Top, b.Width, PicH);
                 using (var path = Theme.Rounded(pic, Theme.F(8)))
                 {
-                    using (var br = new SolidBrush(p.Dark ? Color.FromArgb(22, 28, 52) : Color.FromArgb(226, 231, 244))) g.FillPath(br, path);
+                    using (var br = new SolidBrush(p.TileBg)) g.FillPath(br, path);
                     var st = g.Save();
                     g.SetClip(path, CombineMode.Intersect);
                     if (t.Image != null)
@@ -907,7 +907,7 @@ namespace StillsAndReels
         {
             var g = e.Graphics;
             var p = Theme.Current;
-            g.Clear(p.Dark ? Color.FromArgb(6, 8, 16) : Color.FromArgb(214, 220, 234));
+            g.Clear(p.PreviewBg);
             var r = CanvasRect;
             bool drawn = false;
             lock (frameLock)
@@ -921,7 +921,7 @@ namespace StillsAndReels
                 }
             }
             if (!drawn) using (var b = new SolidBrush(Color.FromArgb(ed.Project.Background))) g.FillRectangle(b, r);
-            using (var pen = new Pen(p.Dark ? Color.FromArgb(40, 48, 84) : p.BarBorder)) g.DrawRectangle(pen, r.X - 1, r.Y - 1, r.Width + 1, r.Height + 1);
+            using (var pen = new Pen(p.PreviewBorder)) g.DrawRectangle(pen, r.X - 1, r.Y - 1, r.Width + 1, r.Height + 1);
             if (!string.IsNullOrEmpty(Message))
             {
                 var st = g.Save();

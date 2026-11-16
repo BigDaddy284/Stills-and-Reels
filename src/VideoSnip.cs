@@ -413,7 +413,7 @@ namespace StillsAndReels
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
             Size = new Size(Theme.S(250), Theme.S(52));
-            BackColor = Color.FromArgb(14, 19, 37);
+            BackColor = Theme.Current.OverlayBg;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
             pause = new ThemedButton { Icon = Ico.Pause, IconOnly = true, Tip = "Pause", Size = new Size(Theme.S(40), Theme.S(36)) };
             pause.Click += (s, e) => { var h = PauseClicked; if (h != null) h(this, EventArgs.Empty); };
@@ -444,7 +444,7 @@ namespace StillsAndReels
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BackColor);
             using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.F(12)))
-            using (var b = new LinearGradientBrush(ClientRectangle, Color.FromArgb(38, 104, 255), Color.FromArgb(176, 72, 255), 0f))
+            using (var b = new LinearGradientBrush(ClientRectangle, Theme.Current.OverlayA, Theme.Current.OverlayB, 0f))
             using (var pen = new Pen(b, Theme.F(1.5f))) g.DrawPath(pen, path);
             bool p = paused();
             bool blink = DateTime.Now.Millisecond < 600;
@@ -522,7 +522,7 @@ namespace StillsAndReels
             Font = Theme.UiFont(9.5f);
             KeyPreview = true;
             MinimumSize = new Size(Theme.S(620), Theme.S(420));
-            try { Icon = host.Icon; } catch { }
+            try { if (Theme.AppIcon != null) Icon = Theme.AppIcon; } catch { }
 
             flow.Padding = new Padding(Theme.S(10), Theme.S(8), Theme.S(10), Theme.S(4));
             flow.BackColor = Theme.Current.Bar;
@@ -1017,7 +1017,7 @@ namespace StillsAndReels
                 StartPosition = FormStartPosition.Manual;
                 int s = Theme.S(140);
                 Bounds = new Rectangle(region.Left + (region.Width - s) / 2, region.Top + (region.Height - s) / 2, s, s);
-                BackColor = Color.FromArgb(14, 19, 37);
+                BackColor = Theme.Current.OverlayBg;
                 using (var path = new GraphicsPath()) { path.AddEllipse(0, 0, s, s); Region = new Region(path); }
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
                 KeyPreview = true;
@@ -1034,7 +1034,7 @@ namespace StillsAndReels
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(BackColor);
-                using (var b = new LinearGradientBrush(ClientRectangle, Color.FromArgb(38, 104, 255), Color.FromArgb(176, 72, 255), 30f))
+                using (var b = new LinearGradientBrush(ClientRectangle, Theme.Current.OverlayA, Theme.Current.OverlayB, 30f))
                 using (var pen = new Pen(b, Theme.F(5))) g.DrawEllipse(pen, Theme.F(4), Theme.F(4), Width - Theme.F(8), Height - Theme.F(8));
                 TextRenderer.DrawText(g, n.ToString(), new Font("Segoe UI", 44f, FontStyle.Bold), ClientRectangle, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);

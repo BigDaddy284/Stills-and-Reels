@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs>
+<linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34363b"/><stop offset="1" stop-color="#1e1f22"/></linearGradient>
+<linearGradient id="sky" gradientUnits="userSpaceOnUse" x1="200" y1="270" x2="824" y2="754"><stop offset="0" stop-color="#4a95ff"/><stop offset="1" stop-color="#9ccdff"/></linearGradient>
+<filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<mask id="lens"><rect width="1024" height="1024" fill="white"/><circle cx="400" cy="522" r="42" fill="black"/></mask>
+</defs>
+<rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#tile)"/>
+<g transform="translate(512 512) scale(1.2) translate(-512 -512)" stroke="url(#sky)" stroke-linejoin="round" stroke-linecap="round">
+<rect x="200" y="270" width="624" height="484" rx="60" stroke-width="80" fill="none"/>
+<g transform="translate(12,-6)"><path d="M300 462 Q300 442 320 442 L352 442 L370 414 L430 414 L448 442 L480 442 Q500 442 500 462 L500 582 Q500 602 480 602 L320 602 Q300 602 300 582 Z" fill="url(#sky)" stroke-width="20" mask="url(#lens)"/><circle cx="400" cy="522" r="20" fill="url(#sky)" stroke="none"/><path d="M585 437 L585 587 L705 512 Z" fill="url(#sky)" stroke-width="30"/></g>
+</g></svg>

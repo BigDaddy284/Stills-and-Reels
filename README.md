@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/images/app-icon.png" alt="Stills & Reels icon" width="96">
+
 <img src="docs/images/edit-picture.png" alt="Stills & Reels, editing a picture" width="760">
 
 # Stills & Reels
@@ -8,7 +10,7 @@
 
 ![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![.NET Framework 4.8](https://img.shields.io/badge/.NET%20Framework-4.8-512BD4)
-![Version 2.5](https://img.shields.io/badge/version-2.5-7C5CFF)
+![Version 2.6](https://img.shields.io/badge/version-2.6-2580EE)
 ![Offline](https://img.shields.io/badge/network-none-2EA043)
 [![Licence: GPLv3](https://img.shields.io/badge/licence-GPLv3-blue)](LICENSE)
 
@@ -181,6 +183,8 @@ Recording changes must pass the whole of [tests/TEST PLAN.md](tests/TEST%20PLAN.
 
 ## What's new
 
+**2.6:** a third theme, **Graphite** (charcoal greys with a sky-blue accent), in View > Theme, the ⋯ menu and Settings. A new app icon in the Sky Classic style, a sky-blue frame with a camera and a play mark, used by the exe and every window.
+
 **2.5:** Pic Snip and Vid Snip from the taskbar run on their own, with no main window until you choose Paste into editor or Add to video editor; closing the main window leaves open snip windows running, and the app ends when the last window closes.
 
 **2.4:** the timeline playhead moves with the preview while it plays, dragging the playhead shows the frame under it as you go (frames are decoded ahead of the pointer and kept), frame stepping is quicker, the timeline repaints only what changed during playback, imported sound is ready sooner, and export overlaps composing and encoding.
@@ -197,7 +201,7 @@ See the [changelog](CHANGELOG.md) for everything.
 
 Stills & Reels was written with **[Anthropic's Claude](https://claude.ai/code)** as the coding assistant, working from the requests, reference designs and testing of the project's owner. No source code, icons or other assets were copied from any other project or product:
 
-- Every icon is a simple line drawing made in code.
+- Every icon in the interface is a simple line drawing made in code. The app icon follows the Sky Classic style the owner supplied, and the Graphite theme uses the colours of the Graphite theme they supplied.
 - The image effects use standard, published formulas rather than anyone's code: luma weights from ITU-R BT.709, YCbCr from ITU-R BT.601 (for chroma key), saturation and hue-rotation matrices in the style of the W3C Filter Effects specification, the common sepia matrix, and textbook box blur, unsharp mask and vignette techniques.
 
 ## Licence

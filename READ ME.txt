@@ -1,4 +1,4 @@
-Stills & Reels 2.5
+Stills & Reels 2.6
 ==================
 (formerly Picture Preview)
 
@@ -6,6 +6,15 @@ Stills & Reels 2.5
 2. Double-click StillsAndReels.exe. There's nothing to install.
 3. If Windows shows "Windows protected your PC", click "More info" > "Run anyway".
    (This appears because the app isn't code-signed.)
+
+Graphite theme and a new icon (new in 2.6)
+- A third theme, Graphite: soft charcoal greys with a sky-blue accent. Pick it in View > Theme,
+  in the ... menu at the top right, or in Settings > Appearance. Dark and Light are unchanged,
+  and the app remembers your choice.
+- A new app icon in the Sky Classic style: a glowing sky-blue frame on a dark tile, with a camera
+  and a play mark in the middle. It is the exe's icon (File Explorer, taskbar, pinned taskbar
+  shortcut, Pic Snip / Vid Snip jump list) and the icon of every window, including Settings and
+  Export. If Windows still shows the old icon on a pinned shortcut, unpin it and pin it again.
 
 Snip windows on their own (new in 2.5)
 - Pic Snip and Vid Snip from the taskbar no longer start the main window: only the snip
@@ -156,7 +165,10 @@ Stills & Reels' own code
 The application code (C#, about 17,000 lines) was written for you by Claude (Anthropic's
 AI assistant) during this project. No source code, icons or other assets were copied from
 any other project, repository or product:
-- All icons are simple line drawings made in code.
+- All icons in the interface are simple line drawings made in code.
+- The app icon (new in 2.6) follows the Sky Classic icon style you supplied (tile, sky-blue
+  gradient and glow); the frame, camera and play drawing itself is new.
+- The Graphite theme's colours come from the Graphite theme you supplied (from Myiles).
 - The look follows the reference image you supplied.
 - The image effects use standard, published formulas rather than anyone's code:
   luma weights from ITU-R BT.709, the YCbCr conversion from ITU-R BT.601 (chroma key),

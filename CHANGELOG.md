@@ -1,6 +1,11 @@
 # Changelog
 
-## 2.5 (current)
+## 2.6 (current)
+
+- **Graphite theme.** A third theme alongside Dark and Light: soft charcoal greys with a sky-blue accent (the Graphite theme's own colours: bar #1b1c1f, window #2a2b2f, panels #222327, accent #2580ee to #8cc4ff). Choose it in View > Theme, the ⋯ menu or Settings > Appearance; the choice is saved as . Surfaces that were fixed navy colours in the code (timeline, tracks, preview surround, effect tiles, text boxes, media thumbnails, timeline tooltips, the snip bars, countdown and badges, the Windows 11 window border) now come from the theme, so Graphite is grey throughout. In Dark and Light they look exactly as before.
+- **New app icon** in the Sky Classic style: a glowing sky-blue frame with a camera and a play mark side by side in the middle on a dark tile. The .ico holds 16, 20, 24, 32, 40, 48, 64 and 256 px images, with a simplified, bolder drawing for 16 to 24 px so it stays sharp in title bars. It is the exe's icon and is also embedded as a resource, and every window uses it: the main window, Snip, Video snip, Settings and Export (Settings and Export used to show the default Windows icon).
+
+## 2.5
 
 - **Snip windows on their own.** Pic Snip and Vid Snip from the taskbar (and `--picsnip` / `--vidsnip`) no longer start the main window: only the snip window appears, with its own taskbar button. The main window opens when you choose **Paste into editor** or **Add to video editor**, and closing the last snip window ends the app. (The main window used to wait minimised in the taskbar.)
 - **Windows close separately.** Closing the main window while a snip window is open hides it instead of closing the app, after the usual questions about unsaved pictures and projects, so the snip window carries on; the app ends when the last window closes. **File > Exit** closes everything at once, as does Windows shutting down.

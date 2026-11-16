@@ -31,6 +31,19 @@ namespace StillsAndReels
         public Color Warning;
         public Color Glow;        // ambient glow on empty states
         public Color VideoBg;
+        public string Name;       // "Dark", "Light" or "Graphite" (saved in settings)
+        // surfaces that used to be fixed colours in the controls that draw them
+        public Color TileBg;      // effect / filter sample tiles in the video editor
+        public Color PreviewBg;   // around the video editor preview
+        public Color PreviewBorder; // preview frame and the Windows 11 window border
+        public Color InputBg;     // text boxes
+        public Color TimelineBg;
+        public Color TrackMain, TrackOther;
+        public Color PopupBg;     // timeline tooltips (with alpha)
+        public Color ThumbBg;     // behind media thumbnails
+        public Color TextSampleA, TextSampleB; // text style samples
+        public Color OverlayBg;   // snip bars, countdown and badges (always dark)
+        public Color OverlayA, OverlayB; // their accent gradient
     }
 
     internal static class Theme
@@ -58,6 +71,21 @@ namespace StillsAndReels
             Warning = Color.FromArgb(255, 190, 110),
             Glow = Color.FromArgb(40, 70, 150),
             VideoBg = Color.FromArgb(5, 7, 14),
+            Name = "Dark",
+            TileBg = Color.FromArgb(22, 28, 52),
+            PreviewBg = Color.FromArgb(6, 8, 16),
+            PreviewBorder = Color.FromArgb(40, 48, 84),
+            InputBg = Color.FromArgb(24, 30, 56),
+            TimelineBg = Color.FromArgb(11, 14, 28),
+            TrackMain = Color.FromArgb(18, 23, 44),
+            TrackOther = Color.FromArgb(15, 19, 36),
+            PopupBg = Color.FromArgb(235, 26, 32, 60),
+            ThumbBg = Color.FromArgb(20, 24, 40),
+            TextSampleA = Color.FromArgb(30, 44, 90),
+            TextSampleB = Color.FromArgb(70, 40, 110),
+            OverlayBg = Color.FromArgb(14, 19, 37),
+            OverlayA = Color.FromArgb(38, 104, 255),
+            OverlayB = Color.FromArgb(176, 72, 255),
         };
 
         public static readonly Palette LightPalette = new Palette
@@ -83,19 +111,111 @@ namespace StillsAndReels
             Warning = Color.FromArgb(196, 98, 0),
             Glow = Color.FromArgb(160, 185, 255),
             VideoBg = Color.FromArgb(12, 14, 22),
+            Name = "Light",
+            TileBg = Color.FromArgb(226, 231, 244),
+            PreviewBg = Color.FromArgb(214, 220, 234),
+            PreviewBorder = Color.FromArgb(221, 226, 238),
+            InputBg = Color.White,
+            TimelineBg = Color.FromArgb(240, 243, 250),
+            TrackMain = Color.FromArgb(228, 233, 246),
+            TrackOther = Color.FromArgb(234, 238, 248),
+            PopupBg = Color.FromArgb(240, 255, 255, 255),
+            ThumbBg = Color.FromArgb(20, 24, 40),
+            TextSampleA = Color.FromArgb(30, 44, 90),
+            TextSampleB = Color.FromArgb(70, 40, 110),
+            OverlayBg = Color.FromArgb(14, 19, 37),
+            OverlayA = Color.FromArgb(38, 104, 255),
+            OverlayB = Color.FromArgb(176, 72, 255),
+        };
+
+        /// <summary>Graphite: soft charcoal greys with a sky-blue accent (the Myiles Graphite theme). A dark theme.</summary>
+        public static readonly Palette GraphitePalette = new Palette
+        {
+            Dark = true,
+            Name = "Graphite",
+            Window = Color.FromArgb(42, 43, 47),        // #2a2b2f
+            Bar = Color.FromArgb(27, 28, 31),           // #1b1c1f
+            BarBorder = Color.FromArgb(56, 58, 64),     // #383a40
+            Canvas = Color.FromArgb(29, 30, 33),        // #1d1e21
+            Panel = Color.FromArgb(34, 35, 39),         // #222327
+            Text = Color.FromArgb(236, 236, 238),       // #ececee
+            SubText = Color.FromArgb(169, 172, 179),    // #a9acb3
+            Muted = Color.FromArgb(117, 120, 127),      // #75787f
+            Hover = Color.FromArgb(53, 55, 60),         // #35373c
+            Pressed = Color.FromArgb(61, 64, 70),       // #3d4046
+            Pill = Color.FromArgb(30, 31, 34),
+            PillSep = Color.FromArgb(82, 85, 92),
+            AccentA = Color.FromArgb(37, 128, 238),     // #2580ee
+            AccentB = Color.FromArgb(140, 196, 255),    // #8cc4ff
+            SelectedText = Color.White,
+            Control = Color.FromArgb(53, 55, 60),       // #35373c
+            ControlBorder = Color.FromArgb(74, 77, 84), // #4a4d54
+            Warning = Color.FromArgb(255, 190, 110),
+            Glow = Color.FromArgb(53, 90, 140),
+            VideoBg = Color.FromArgb(20, 21, 23),
+            TileBg = Color.FromArgb(42, 43, 47),
+            PreviewBg = Color.FromArgb(20, 21, 23),
+            PreviewBorder = Color.FromArgb(56, 58, 64),
+            InputBg = Color.FromArgb(53, 55, 60),
+            TimelineBg = Color.FromArgb(29, 30, 33),
+            TrackMain = Color.FromArgb(36, 37, 41),
+            TrackOther = Color.FromArgb(32, 33, 37),
+            PopupBg = Color.FromArgb(235, 42, 43, 47),
+            ThumbBg = Color.FromArgb(29, 30, 33),
+            TextSampleA = Color.FromArgb(34, 44, 60),
+            TextSampleB = Color.FromArgb(47, 74, 110),
+            OverlayBg = Color.FromArgb(34, 35, 39),
+            OverlayA = Color.FromArgb(37, 128, 238),
+            OverlayB = Color.FromArgb(140, 196, 255),
         };
 
         static Palette current = DarkPalette;
         public static Palette Current { get { return current; } }
         public static event EventHandler Changed;
 
-        public static void Set(bool dark)
+        public static void Set(bool dark) { Set(dark ? DarkPalette : LightPalette); }
+
+        /// <summary>Picks a theme by its saved name ("Dark", "Light" or "Graphite"); anything else gives Dark.</summary>
+        public static void Set(string name) { Set(ByName(name)); }
+
+        public static Palette ByName(string name)
         {
-            var p = dark ? DarkPalette : LightPalette;
+            if (name == "Light") return LightPalette;
+            if (name == "Graphite") return GraphitePalette;
+            return DarkPalette;
+        }
+
+        static void Set(Palette p)
+        {
             if (ReferenceEquals(p, current)) return;
             current = p;
             var h = Changed;
             if (h != null) h(null, EventArgs.Empty);
+        }
+
+        // ------------------------------------------------------------------ app icon
+
+        static Icon appIcon;
+        static bool appIconTried;
+
+        /// <summary>The app icon with every size in it (16 to 256 px), so title bars and the taskbar get a sharp one.
+        /// It is embedded in the exe as a resource as well as being the exe's own icon.</summary>
+        public static Icon AppIcon
+        {
+            get
+            {
+                if (appIconTried) return appIcon;
+                appIconTried = true;
+                try
+                {
+                    using (var s = typeof(Theme).Assembly.GetManifestResourceStream("StillsAndReels.app.ico"))
+                        if (s != null) appIcon = new Icon(s);
+                }
+                catch { appIcon = null; }
+                if (appIcon == null)
+                    try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+                return appIcon;
+            }
         }
 
         // ------------------------------------------------------------------ DPI & fonts
@@ -307,7 +427,7 @@ namespace StillsAndReels
                 DwmSetWindowAttribute(f.Handle, 35, ref caption, 4);
                 int text = ColorRef(current.Text);
                 DwmSetWindowAttribute(f.Handle, 36, ref text, 4);
-                int border = ColorRef(current.Dark ? Color.FromArgb(40, 48, 84) : current.BarBorder);
+                int border = ColorRef(current.PreviewBorder);
                 DwmSetWindowAttribute(f.Handle, 34, ref border, 4);
             }
             catch { }

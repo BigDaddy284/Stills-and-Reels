@@ -2182,7 +2182,7 @@ namespace StillsAndReels
 
         static void DrawTextSample(Graphics g, RectangleF r, Clip sample)
         {
-            using (var b = new LinearGradientBrush(r, Color.FromArgb(30, 44, 90), Color.FromArgb(70, 40, 110), 30f)) g.FillRectangle(b, r);
+            using (var b = new LinearGradientBrush(r, Theme.Current.TextSampleA, Theme.Current.TextSampleB, 30f)) g.FillRectangle(b, r);
             var c = sample.Clone();
             c.X = 0; c.Y = 0;
             float canvasH = r.Height * (c.TextStyle == "lower" ? 1.5f : 2.0f);
@@ -2200,7 +2200,7 @@ namespace StillsAndReels
 
         static void DrawTransitionSample(Graphics g, RectangleF r, string id)
         {
-            var a = Color.FromArgb(48, 104, 255); var b = Color.FromArgb(176, 72, 255);
+            var a = Theme.Current.OverlayA; var b = Theme.Current.OverlayB;
             using (var ba = new SolidBrush(a)) g.FillRectangle(ba, r);
             float p = 0.5f;
             var st = g.Save();
@@ -2628,7 +2628,7 @@ namespace StillsAndReels
             {
                 Multiline = true, AcceptsReturn = true, Text = c.Text.Replace("\r\n", "\n").Replace("\n", "\r\n"), Height = Theme.S(78),
                 BorderStyle = BorderStyle.FixedSingle, Font = Theme.UiFont(10.5f), ScrollBars = ScrollBars.Vertical,
-                BackColor = Theme.Current.Dark ? Color.FromArgb(24, 30, 56) : Color.White, ForeColor = Theme.Current.Text
+                BackColor = Theme.Current.InputBg, ForeColor = Theme.Current.Text
             };
             tb.TextChanged += (s, e) => { var cc = project.FindClip(id); if (cc == null) return; BeginChange("text" + id); cc.Text = tb.Text.Replace("\r\n", "\n"); LiveChanged(); };
             tb.Leave += (s, e) => Changed();

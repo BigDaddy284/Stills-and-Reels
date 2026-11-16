@@ -9,12 +9,13 @@ namespace StillsAndReels
     {
         public sealed class Options
         {
-            public bool Dark, Follow, TopMost, StatusBar, PixelGrid, Autoplay, KeepViewed, PickClicks, PickFiles, PickCopied;
+            public string ThemeName = "Dark";
+            public bool Follow, TopMost, StatusBar, PixelGrid, Autoplay, KeepViewed, PickClicks, PickFiles, PickCopied;
         }
 
         readonly Options o;
         readonly Action<Options> apply;
-        readonly ThemedButton dark, light;
+        readonly ThemedButton dark, light, graphite;
         readonly ThemedPanel body = new ThemedPanel { Surface = Surface.Panel, Dock = DockStyle.Fill };
 
         public SettingsForm(Options options, Action<Options> apply)
@@ -26,6 +27,7 @@ namespace StillsAndReels
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
+            try { if (Theme.AppIcon != null) Icon = Theme.AppIcon; } catch { }
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.None;
             ClientSize = new Size(Theme.S(480), Theme.S(600));
@@ -36,15 +38,19 @@ namespace StillsAndReels
             y = AddTitle("Settings", y, pad, w);
 
             y = AddSection("Appearance", y, pad, w);
-            int half = (w - Theme.S(10)) / 2;
-            dark = new ThemedButton { Icon = Ico.Moon, Text = "Dark mode", Tip = "Dark mode (default)" };
-            light = new ThemedButton { Icon = Ico.Sun, Text = "Light mode", Tip = "Light mode" };
-            dark.SetBounds(pad, y, half, Theme.S(44));
-            light.SetBounds(pad + half + Theme.S(10), y, half, Theme.S(44));
-            dark.Click += (s, e) => { o.Dark = true; Sync(); apply(o); };
-            light.Click += (s, e) => { o.Dark = false; Sync(); apply(o); };
+            int third = (w - Theme.S(20)) / 3;
+            dark = new ThemedButton { Icon = Ico.Moon, Text = "Dark", Tip = "Dark mode (default)" };
+            light = new ThemedButton { Icon = Ico.Sun, Text = "Light", Tip = "Light mode" };
+            graphite = new ThemedButton { Icon = Ico.Sparkle, Text = "Graphite", Tip = "Graphite: charcoal greys with a sky-blue accent" };
+            dark.SetBounds(pad, y, third, Theme.S(44));
+            light.SetBounds(pad + third + Theme.S(10), y, third, Theme.S(44));
+            graphite.SetBounds(pad + (third + Theme.S(10)) * 2, y, w - (third + Theme.S(10)) * 2, Theme.S(44));
+            dark.Click += (s, e) => { o.ThemeName = "Dark"; Sync(); apply(o); };
+            light.Click += (s, e) => { o.ThemeName = "Light"; Sync(); apply(o); };
+            graphite.Click += (s, e) => { o.ThemeName = "Graphite"; Sync(); apply(o); };
             body.Controls.Add(dark);
             body.Controls.Add(light);
+            body.Controls.Add(graphite);
             y += Theme.S(56);
 
             y = AddSection("Following", y, pad, w);
@@ -98,8 +104,9 @@ namespace StillsAndReels
 
         void Sync()
         {
-            dark.Checked = o.Dark;
-            light.Checked = !o.Dark;
+            dark.Checked = o.ThemeName == "Dark";
+            light.Checked = o.ThemeName == "Light";
+            graphite.Checked = o.ThemeName == "Graphite";
         }
 
         int AddTitle(string text, int y, int x, int w)
