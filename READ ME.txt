@@ -12,9 +12,9 @@ Graphite theme and a new icon (new in 2.6)
   in the ... menu at the top right, or in Settings > Appearance. Dark and Light are unchanged,
   and the app remembers your choice.
 - A new app icon in the Sky Classic style: a glowing sky-blue frame on a dark tile, with a camera
-  and a play mark in the middle. It is the exe's icon (File Explorer, taskbar, pinned taskbar shortcut,
-  Pic Snip / Vid Snip jump list) and the icon of every window, including Settings and Export.
-  If Windows still shows the old icon on a pinned shortcut, unpin it and pin it again.
+  and a play mark in the middle. It is the exe's icon (File Explorer, taskbar, pinned taskbar
+  shortcut, Pic Snip / Vid Snip jump list) and the icon of every window, including Settings and
+  Export. If Windows still shows the old icon on a pinned shortcut, unpin it and pin it again.
 
 Snip windows on their own (new in 2.5)
 - Pic Snip and Vid Snip from the taskbar no longer start the main window: only the snip
