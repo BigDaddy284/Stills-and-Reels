@@ -19,7 +19,46 @@ namespace StillsAndReels
         [DataMember] public double X, Y;
         [DataMember] public double Scale = 1, Rotation, Opacity = 1;
         [DataMember] public bool Ease = true;
+        /// <summary>
+        /// How the values travel to this keyframe from the one before. 0 = as Ease says (what 2.6 saved: smooth or
+        /// straight), 1 straight, 2 smooth, 3 slow start, 4 slow finish, 5 stay then jump, 6 overshoot and settle, 7 bounce.
+        /// </summary>
+        [DataMember] public int Curve;
         public Keyframe Clone() { return (Keyframe)MemberwiseClone(); }
+
+        public int CurveKind { get { return Curve >= 1 && Curve <= 7 ? Curve : Ease ? 2 : 1; } }
+
+        public static readonly string[] CurveNames = { "", "Straight", "Smooth", "Slow start", "Slow finish", "Stay, then jump", "Overshoot", "Bounce" };
+
+        /// <summary>Progress along the way to this keyframe (0..1) shaped by its curve.</summary>
+        public double Shape(double u)
+        {
+            switch (CurveKind)
+            {
+                case 2: return u * u * (3 - 2 * u);
+                case 3: return u * u * u;
+                case 4: { double v = 1 - u; return 1 - v * v * v; }
+                case 5: return u >= 1 - 1e-9 ? 1 : 0;
+                case 6: { const double c1 = 1.70158, c3 = c1 + 1; double v = u - 1; return 1 + c3 * v * v * v + c1 * v * v; }
+                case 7:
+                    {
+                        const double n1 = 7.5625, d1 = 2.75;
+                        if (u < 1 / d1) return n1 * u * u;
+                        if (u < 2 / d1) { u -= 1.5 / d1; return n1 * u * u + 0.75; }
+                        if (u < 2.5 / d1) { u -= 2.25 / d1; return n1 * u * u + 0.9375; }
+                        u -= 2.625 / d1; return n1 * u * u + 0.984375;
+                    }
+                default: return u;
+            }
+        }
+    }
+
+    /// <summary>A named point on the timeline to line things up with.</summary>
+    [DataContract(Namespace = "")]
+    internal sealed class Marker
+    {
+        [DataMember] public double T;
+        [DataMember] public string Name;
     }
 
     /// <summary>Transform values at one moment.</summary>
@@ -167,12 +206,13 @@ namespace StillsAndReels
                 {
                     double u = (lt - a.T) / Math.Max(1e-6, b.T - a.T);
                     u = Math.Max(0, Math.Min(1, u));
-                    if (b.Ease) u = u * u * (3 - 2 * u);
+                    u = b.Shape(u);
                     p.X = a.X + (b.X - a.X) * u;
                     p.Y = a.Y + (b.Y - a.Y) * u;
                     p.Scale = a.Scale + (b.Scale - a.Scale) * u;
                     p.Rotation = a.Rotation + (b.Rotation - a.Rotation) * u;
-                    p.Opacity = a.Opacity + (b.Opacity - a.Opacity) * u;
+                    p.Opacity = Math.Max(0, Math.Min(1, a.Opacity + (b.Opacity - a.Opacity) * u));
+                    if (p.Scale < 0.01) p.Scale = 0.01;   // an overshooting curve mustn't turn the clip inside out
                 }
             }
             return p;
@@ -483,6 +523,11 @@ namespace StillsAndReels
         [DataMember] public List<Track> Tracks = new List<Track>();
         [DataMember] public List<MediaRef> Media = new List<MediaRef>();
         [DataMember] public int NextId = 1;
+        // New in 3.0
+        [DataMember] public double MarkIn, MarkOut;                        // the marked range; MarkOut at or before MarkIn means none
+        [DataMember] public List<Marker> Markers = new List<Marker>();
+
+        public bool HasRange { get { return MarkOut > MarkIn + 0.01; } }
 
         public Project()
         {
@@ -498,6 +543,8 @@ namespace StillsAndReels
             foreach (var t in Tracks) p.Tracks.Add(t.Clone());
             p.Media = new List<MediaRef>();
             foreach (var m in Media) p.Media.Add(new MediaRef { Id = m.Id, Path = m.Path, Name = m.Name });
+            p.Markers = new List<Marker>();
+            foreach (var m in Markers) p.Markers.Add(new Marker { T = m.T, Name = m.Name });
             return p;
         }
 
@@ -506,6 +553,7 @@ namespace StillsAndReels
         {
             if (Tracks == null) Tracks = new List<Track>();
             if (Media == null) Media = new List<MediaRef>();
+            if (Markers == null) Markers = new List<Marker>();
             if (Tracks.Count == 0 || Tracks[0].Kind != TrackKind.Video) Tracks.Insert(0, new Track { Id = NextId++, Kind = TrackKind.Video });
             if (Width < 16 || Height < 16) { Width = 1920; Height = 1080; }
             if (Fps < 1 || Fps > 120) Fps = 30;

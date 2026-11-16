@@ -292,9 +292,10 @@ namespace StillsAndReels
         }
 
         /// <summary>Writes the whole mix as a 16-bit WAV file.</summary>
-        public void WriteWav(string path, double duration, Action<double> progress, Func<bool> cancelled)
+        public void WriteWav(string path, double duration, Action<double> progress, Func<bool> cancelled, double from = 0)
         {
             long total = (long)Math.Ceiling(duration * Rate);
+            long first = (long)Math.Round(from * Rate);
             using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
             using (var w = new BinaryWriter(fs))
             {
@@ -310,7 +311,7 @@ namespace StillsAndReels
                 {
                     if (cancelled()) throw new OperationCanceledException();
                     int n = (int)Math.Min(chunk, total - pos);
-                    Mix(pos, n, mix);
+                    Mix(first + pos, n, mix);
                     ToPcm16(mix, n, 1f, bytes);
                     w.Write(bytes, 0, n * 4);
                     if (progress != null) progress((double)pos / total);
@@ -621,9 +622,18 @@ namespace StillsAndReels
         public string Preset = "medium";
         public bool AudioOnly;
         public int AudioKbps = 192;
+        /// <summary>mp4 (H.264), hevc, webm, gif, mp3, m4a or wav. See Encoders.</summary>
+        public string Format = "mp4";
+        /// <summary>Try the graphics card's encoder first (it falls back to the processor if that fails).</summary>
+        public bool Hardware;
+        /// <summary>The part of the timeline to export, in seconds. To at or before From means all of it.</summary>
+        public double From, To;
     }
 
-    /// <summary>Renders the project with the compositor and encodes it with FFmpeg (H.264 + AAC in MP4, or MP3).</summary>
+    /// <summary>
+    /// Renders the project with the compositor and encodes it with FFmpeg: H.264, HEVC or VP9 video (optionally on
+    /// the graphics card, with the processor as the fallback), an animated GIF, or the mixed sound alone.
+    /// </summary>
     internal sealed class ExportJob
     {
         readonly Project project;
@@ -662,19 +672,28 @@ namespace StillsAndReels
             var err = new StringBuilder();
             try
             {
-                double duration = project.Duration;
-                if (duration <= 0.01) throw new InvalidOperationException("The timeline is empty.");
-                Report(0, "Preparing sound…");
-                bool hasSound;
-                using (var mixer = new AudioMixer(project, Media, () => cancelled))
+                if (project.Duration <= 0.01) throw new InvalidOperationException("The timeline is empty.");
+                string format = settings.AudioOnly && !Encoders.IsAudio(settings.Format) ? "mp3" : (settings.Format ?? "mp4");
+                bool ranged = settings.To > settings.From + 0.01;
+                from = ranged ? Math.Max(0, Math.Min(project.Duration, settings.From)) : 0;
+                double duration = (ranged ? Math.Min(project.Duration, settings.To) : project.Duration) - from;
+                if (duration <= 0.01) throw new InvalidOperationException("The marked range is empty.");
+                bool audioOnly = Encoders.IsAudio(format);
+                bool hasSound = false;
+                if (format != "gif")
                 {
-                    if (cancelled) throw new OperationCanceledException();
-                    hasSound = mixer.HasSound;
-                    if (hasSound || settings.AudioOnly)
-                        mixer.WriteWav(wav, duration, p => Report(p * (settings.AudioOnly ? 0.5 : 0.08), "Mixing sound…"), () => cancelled);
+                    Report(0, "Preparing sound…");
+                    using (var mixer = new AudioMixer(project, Media, () => cancelled))
+                    {
+                        if (cancelled) throw new OperationCanceledException();
+                        hasSound = mixer.HasSound;
+                        if (hasSound || audioOnly)
+                            mixer.WriteWav(wav, duration, p => Report(p * (audioOnly ? 0.5 : 0.08), "Mixing sound…"), () => cancelled, from);
+                    }
                 }
-                if (settings.AudioOnly) ExportAudio(wav, duration, err);
-                else ExportVideo(wav, hasSound, duration, err);
+                if (audioOnly) ExportAudio(format, wav, err);
+                else if (format == "gif") ExportGif(duration, err);
+                else ExportVideo(format, wav, hasSound, duration, err);
             }
             catch (Exception ex) { error = ex; }
             finally
@@ -712,43 +731,117 @@ namespace StillsAndReels
             return p;
         }
 
-        void ExportAudio(string wav, double duration, StringBuilder err)
+        double from;   // where on the timeline the export starts
+
+        void ExportAudio(string format, string wav, StringBuilder err)
         {
-            string args = "-hide_banner -loglevel error -protocol_whitelist file -i " + FFmpeg.Quote(wav) +
-                          " -c:a libmp3lame -b:a " + settings.AudioKbps + "k -y " + FFmpeg.Quote(settings.OutPath);
+            if (format == "wav")
+            {
+                // the mix is already a WAV file
+                Report(0.9, "Writing the file…");
+                File.Copy(wav, settings.OutPath, true);
+                Report(1, "Done");
+                return;
+            }
+            string codec = format == "m4a" ? "-c:a aac -b:a " + settings.AudioKbps + "k -movflags +faststart" : "-c:a libmp3lame -b:a " + settings.AudioKbps + "k";
+            string args = "-hide_banner -loglevel error -protocol_whitelist file -i " + FFmpeg.Quote(wav) + " " + codec + " -y " + FFmpeg.Quote(settings.OutPath);
             proc = StartEncoder(args, err);
             proc.StandardInput.Close();
             while (!proc.WaitForExit(200))
             {
                 if (cancelled) throw new OperationCanceledException();
-                Report(0.75, "Encoding MP3…");
+                Report(0.75, "Encoding the sound…");
             }
             if (proc.ExitCode != 0) throw new IOException("FFmpeg couldn't write the file.");
             Report(1, "Done");
         }
 
-        void ExportVideo(string wav, bool hasSound, double duration, StringBuilder err)
+        void ExportVideo(string format, string wav, bool hasSound, double duration, StringBuilder err)
         {
             int w = settings.Width & ~1, h = settings.Height & ~1;
             double fps = settings.Fps;
             var inv = CultureInfo.InvariantCulture;
-            var sb = new StringBuilder("-hide_banner -loglevel error ");
-            sb.AppendFormat(inv, "-f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} -protocol_whitelist pipe -i pipe:0 ", w, h, fps);
-            if (hasSound) sb.Append("-protocol_whitelist file -i ").Append(FFmpeg.Quote(wav)).Append(' ');
-            sb.Append("-map 0:v:0 ");
-            if (hasSound) sb.Append("-map 1:a:0 ");
-            sb.Append(VideoQuality.H264FromRgb(settings.Crf, settings.Preset));
-            if (hasSound) sb.AppendFormat(inv, "-c:a aac -b:a {0}k ", settings.AudioKbps);
-            sb.AppendFormat(inv, "-movflags +faststart -t {0:0.###} -y ", duration);
-            sb.Append(FFmpeg.Quote(settings.OutPath));
-            proc = StartEncoder(sb.ToString(), err);
-            var stdin = proc.StandardInput.BaseStream;
+            string hardware = settings.Hardware ? Encoders.Detect(format) : null;
+            while (true)
+            {
+                var sb = new StringBuilder("-hide_banner -loglevel error ");
+                sb.AppendFormat(inv, "-f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} -protocol_whitelist pipe -i pipe:0 ", w, h, fps);
+                if (hasSound) sb.Append("-protocol_whitelist file -i ").Append(FFmpeg.Quote(wav)).Append(' ');
+                sb.Append("-map 0:v:0 ");
+                if (hasSound) sb.Append("-map 1:a:0 ");
+                sb.Append(Encoders.VideoArgs(format, hardware, settings.Crf, settings.Preset));
+                if (hasSound) sb.Append(Encoders.AudioArgs(format, settings.AudioKbps));
+                if (format != "webm") sb.Append("-movflags +faststart ");
+                sb.AppendFormat(inv, "-t {0:0.###} -y ", duration);
+                sb.Append(FFmpeg.Quote(settings.OutPath));
+                lock (err) err.Length = 0;
+                proc = StartEncoder(sb.ToString(), err);
+                try
+                {
+                    RenderInto(proc, w, h, fps, duration, 0.08, 0.9, "Rendering frame");
+                    Report(0.99, "Finishing the file…");
+                    while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
+                    if (proc.ExitCode != 0) throw new IOException("FFmpeg couldn't write the video.");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    // The graphics card's encoder can refuse a size, run out of sessions or lose its driver part-way.
+                    // The processor's encoder always works, so the export starts again with it.
+                    if (hardware == null || cancelled || ex is OperationCanceledException) throw;
+                    FFmpeg.KillQuietly(proc);
+                    UsedFallback = true;
+                    hardware = null;
+                    Report(0.08, "The graphics card couldn't encode this – starting again on the processor…");
+                }
+            }
+            UsedHardware = hardware;
+            Report(1, "Done");
+        }
 
+        /// <summary>The hardware encoder the finished export used ("nvenc", "qsv", "amf"), or null for the processor.</summary>
+        public string UsedHardware;
+        /// <summary>The graphics card was tried and failed, and the processor finished the job.</summary>
+        public bool UsedFallback;
+
+        /// <summary>
+        /// An animated GIF needs its own 256 colours: the frames are rendered once to choose them and once more to
+        /// write the file with them. Two passes keep the memory flat however long the GIF is.
+        /// </summary>
+        void ExportGif(double duration, StringBuilder err)
+        {
+            int w = Math.Max(2, settings.Width), h = Math.Max(2, settings.Height);
+            double fps = Math.Max(1, Math.Min(50, settings.Fps));
+            var inv = CultureInfo.InvariantCulture;
+            string palette = Path.Combine(MediaLibrary.Folder, "export-" + Guid.NewGuid().ToString("N") + ".png");
+            try
+            {
+                string input = string.Format(inv, "-hide_banner -loglevel error -f rawvideo -pix_fmt bgra -s {0}x{1} -framerate {2:0.###} -protocol_whitelist pipe -i pipe:0 ", w, h, fps);
+                proc = StartEncoder(input + "-vf palettegen=stats_mode=full -frames:v 1 -update 1 -y " + FFmpeg.Quote(palette), err);
+                RenderInto(proc, w, h, fps, duration, 0, 0.45, "Choosing colours, frame");
+                while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
+                if (proc.ExitCode != 0 || !File.Exists(palette)) throw new IOException("FFmpeg couldn't work out the GIF's colours.");
+                lock (err) err.Length = 0;
+                proc = StartEncoder(input + "-protocol_whitelist file -i " + FFmpeg.Quote(palette) +
+                    " -lavfi \"[0:v][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle\" -loop 0 -y " + FFmpeg.Quote(settings.OutPath), err);
+                RenderInto(proc, w, h, fps, duration, 0.45, 0.54, "Writing frame");
+                Report(0.99, "Finishing the file…");
+                while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
+                if (proc.ExitCode != 0) throw new IOException("FFmpeg couldn't write the GIF.");
+                Report(1, "Done");
+            }
+            finally { ImageCache.Delete(palette); }
+        }
+
+        /// <summary>Composes every frame of the exported part and pipes it to the encoder, then closes the pipe.</summary>
+        void RenderInto(Process encoder, int w, int h, double fps, double duration, double progressFrom, double progressSpan, string label)
+        {
+            var stdin = encoder.StandardInput.BaseStream;
             long total = Math.Max(1, (long)Math.Ceiling(duration * fps - 1e-6));
             var comp = new Compositor(project, Media) { HighQuality = true };
             var sw = Stopwatch.StartNew();
             // Frames go to the encoder from a second thread with two buffers, so the next frame is composed while
-            // the previous one is still being written into FFmpeg's pipe (the write blocks whenever x264 is behind).
+            // the previous one is still being written into FFmpeg's pipe (the write blocks whenever the encoder is behind).
             var writer = new PipeWriter(stdin, w * h * 4, () => cancelled);
             try
             {
@@ -757,7 +850,7 @@ namespace StillsAndReels
                     for (long i = 0; i < total; i++)
                     {
                         if (cancelled) throw new OperationCanceledException();
-                        double t = i / fps;
+                        double t = from + i / fps;
                         // the picture is composed straight into the buffer that goes to the encoder
                         var buf = writer.TakeFree();
                         comp.Render(new Frame(w, h, buf), t, frames);
@@ -771,17 +864,13 @@ namespace StillsAndReels
                                 double left = sw.Elapsed.TotalSeconds / done * (1 - done);
                                 eta = " – about " + (left >= 90 ? Math.Ceiling(left / 60) + " min" : Math.Max(1, Math.Ceiling(left)) + " s") + " left";
                             }
-                            Report(0.08 + 0.9 * done, "Rendering frame " + (i + 1) + " of " + total + eta);
+                            Report(progressFrom + progressSpan * done, label + " " + (i + 1) + " of " + total + eta);
                         }
                     }
                 }
             }
             finally { comp.ReleaseWork(); writer.Finish(); }
             stdin.Close();
-            Report(0.99, "Finishing the file…");
-            while (!proc.WaitForExit(200)) if (cancelled) throw new OperationCanceledException();
-            if (proc.ExitCode != 0) throw new IOException("FFmpeg couldn't write the video.");
-            Report(1, "Done");
         }
 
         /// <summary>Writes frame buffers to a stream on its own thread; two buffers alternate between composing and writing.</summary>

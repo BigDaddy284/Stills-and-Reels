@@ -22,7 +22,7 @@ namespace StillsAndReels
         sealed class Row { public Track Track; public int Top, Height; public bool NewVideo, NewAudio; }
         readonly List<Row> rows = new List<Row>();
 
-        enum Drag { None, Playhead, Move, TrimLeft, TrimRight, HScroll, Pending }
+        enum Drag { None, Playhead, Move, TrimLeft, TrimRight, HScroll, Pending, Box, FadeIn, FadeOut }
         Drag drag;
         Point downAt;
         Clip dragClip;
@@ -30,6 +30,11 @@ namespace StillsAndReels
         double origStart, origDuration, origIn;
         List<Keyframe> origKeys;
         List<LevelKey> origLevels;
+        List<KeyValuePair<Clip, double>> origLater;   // clips after the trimmed one on its track, with where they started
+        bool moveMany;                                 // the dragged clip is one of several selected: they move together
+        double manyDelta;
+        Point boxTo;
+        HashSet<int> boxBase;
         Row ghostRow;
         double ghostStart;
         double snapLine = double.NaN;
@@ -231,6 +236,8 @@ namespace StillsAndReels
             Action<double> consider = c => { double d = Math.Abs(c - t); if (d < bestD) { bestD = d; best = c; } };
             consider(0);
             if (includePlayhead) consider(ed.Playhead);
+            foreach (var mk in ed.Project.Markers) consider(mk.T);
+            if (ed.Project.HasRange) { consider(ed.Project.MarkIn); consider(ed.Project.MarkOut); }
             foreach (var c in ed.Project.AllClips())
             {
                 if (ReferenceEquals(c, ignore)) continue;
@@ -264,6 +271,34 @@ namespace StillsAndReels
             else if (Math.Abs(p.X - cr.Right) <= tol) edge = Edge.Right;
             else edge = Edge.Body;
             return hit;
+        }
+
+        /// <summary>Where the fade handles of a selected clip sit: at the top, as far in from each end as the fade is long.</summary>
+        RectangleF FadeHandle(Clip c, Row r, bool fadeIn)
+        {
+            var cr = ClipRect(c, r);
+            float s = Theme.F(11);
+            double len = fadeIn ? Math.Max(c.FadeIn, c.AudioFadeIn) : Math.Max(c.FadeOut, c.AudioFadeOut);
+            float x = fadeIn ? cr.Left + (float)(len * pps) : cr.Right - (float)(len * pps);
+            // keep the two apart on a short clip
+            x = fadeIn ? Math.Min(x, cr.Left + cr.Width / 2 - s * 0.6f) : Math.Max(x, cr.Left + cr.Width / 2 + s * 0.6f);
+            // and inside the clip when there is no fade yet
+            x = fadeIn ? Math.Max(x, cr.Left + s * 0.9f) : Math.Min(x, cr.Right - s * 0.9f);
+            return new RectangleF(x - s / 2, cr.Top + Theme.F(3), s, s);
+        }
+
+        bool FadeHandlesShown(Clip c, Row r)
+        {
+            return ed.IsSelected(c) && ed.SelectionCount == 1 && !r.Track.Locked && ClipRect(c, r).Width > Theme.F(70);
+        }
+
+        static void SetFade(Clip c, bool fadeIn, double v)
+        {
+            v = Math.Max(0, Math.Min(c.Duration, v));
+            if (v < 0.03) v = 0;
+            bool sound = c.Kind == ClipKind.Audio || c.Kind == ClipKind.Video;
+            if (fadeIn) { if (c.Kind != ClipKind.Audio) c.FadeIn = v; if (sound) c.AudioFadeIn = v; }
+            else { if (c.Kind != ClipKind.Audio) c.FadeOut = v; if (sound) c.AudioFadeOut = v; }
         }
 
         /// <summary>Header buttons: 0 lock, 1 hide (video only), 2 mute. Audio rows have no hide button.</summary>
@@ -313,6 +348,7 @@ namespace StillsAndReels
             }
             if (e.Y < RulerH && e.X >= ClipLeft)
             {
+                if (e.Button == MouseButtons.Right) { ed.ShowRulerMenu(PointToScreen(e.Location), Math.Max(0, X2T(e.X)), Theme.S(7) / pps); return; }
                 if (e.Button != MouseButtons.Left) return;
                 drag = Drag.Playhead;
                 Capture = true;
@@ -337,8 +373,39 @@ namespace StillsAndReels
             }
             Edge edge; Row row;
             var c = ClipAtPoint(e.Location, out edge, out row);
+            if (e.Button == MouseButtons.Left)
+            {
+                // the fade handles of the selected clip come first: they sit on top of it
+                foreach (var r in rows)
+                {
+                    if (r.Track == null) continue;
+                    foreach (var fc in r.Track.Clips)
+                    {
+                        if (!FadeHandlesShown(fc, r)) continue;
+                        for (int side = 0; side < 2; side++)
+                        {
+                            if (!RectangleF.Inflate(FadeHandle(fc, r, side == 0), Theme.F(3), Theme.F(3)).Contains(e.Location)) continue;
+                            dragClip = fc;
+                            drag = side == 0 ? Drag.FadeIn : Drag.FadeOut;
+                            trimStarted = false;
+                            Capture = true;
+                            return;
+                        }
+                    }
+                }
+            }
             if (c == null)
             {
+                if (e.Button == MouseButtons.Left && (ModifierKeys & (Keys.Shift | Keys.Control)) != 0)
+                {
+                    // drag a box over clips to select them (added to what is selected already)
+                    drag = Drag.Box;
+                    boxTo = e.Location;
+                    boxBase = new HashSet<int>();
+                    foreach (var sc in ed.SelectedClips()) boxBase.Add(sc.Id);
+                    Capture = true;
+                    return;
+                }
                 if (e.Button == MouseButtons.Left)
                 {
                     ed.ClearSelection();
@@ -358,8 +425,11 @@ namespace StillsAndReels
             }
             if (e.Button != MouseButtons.Left) return;
             if (shift) { ed.Select(c, true); return; }
-            if (!ed.IsSelected(c) || ed.SelectionCount > 1) ed.Select(c, false);
-            if (row.Track.Locked) return;
+            // pressing one of several selected clips keeps them all selected, so they can be dragged together;
+            // a plain click (no drag) then narrows the selection to that clip
+            moveMany = ed.IsSelected(c) && ed.SelectionCount > 1 && edge == Edge.Body;
+            if (!moveMany && (!ed.IsSelected(c) || ed.SelectionCount > 1)) ed.Select(c, false);
+            if (row.Track.Locked) { if (moveMany) ed.Select(c, false); moveMany = false; return; }
             dragClip = c;
             origStart = c.Start; origDuration = c.Duration; origIn = c.In;
             origKeys = new List<Keyframe>();
@@ -367,6 +437,8 @@ namespace StillsAndReels
             origLevels = new List<LevelKey>();
             foreach (var k in c.Levels) origLevels.Add(new LevelKey { T = k.T, V = k.V });
             dragOffsetT = X2T(e.X) - c.Start;
+            origLater = new List<KeyValuePair<Clip, double>>();
+            foreach (var o in row.Track.Clips) if (!ReferenceEquals(o, c) && o.Start >= c.End - 1e-6) origLater.Add(new KeyValuePair<Clip, double>(o, o.Start));
             if (edge == Edge.Left || edge == Edge.Right)
             {
                 drag = edge == Edge.Left ? Drag.TrimLeft : Drag.TrimRight;
@@ -414,6 +486,39 @@ namespace StillsAndReels
                         CheckAutoScroll();
                         return;
                     }
+                case Drag.Box:
+                    {
+                        boxTo = e.Location;
+                        BuildRows();
+                        var box = BoxRect();
+                        var ids = new HashSet<int>(boxBase);
+                        foreach (var r in rows)
+                        {
+                            if (r.Track == null) continue;
+                            foreach (var bc in r.Track.Clips)
+                                if (box.IntersectsWith(ClipRect(bc, r))) ids.Add(bc.Id);
+                        }
+                        ed.SelectIds(ids);
+                        CheckAutoScroll();
+                        Invalidate();
+                        return;
+                    }
+                case Drag.FadeIn:
+                case Drag.FadeOut:
+                    {
+                        if (!trimStarted)
+                        {
+                            if (Math.Abs(e.X - downAt.X) < Theme.S(3)) return;
+                            trimStarted = true;
+                            ed.BeginChange(null);
+                        }
+                        double t = X2T(e.X);
+                        double half = dragClip.Duration / 2;
+                        SetFade(dragClip, drag == Drag.FadeIn, drag == Drag.FadeIn ? Math.Min(half, t - dragClip.Start) : Math.Min(half, dragClip.End - t));
+                        ed.LiveChanged();
+                        Invalidate();
+                        return;
+                    }
                 case Drag.Pending:
                     if (Math.Abs(e.X - downAt.X) + Math.Abs(e.Y - downAt.Y) < Theme.S(5)) return;
                     drag = Drag.Move;
@@ -424,6 +529,17 @@ namespace StillsAndReels
                         BuildRows();
                         double raw = Math.Max(0, X2T(e.X) - dragOffsetT);
                         double dur = dragClip.Duration;
+                        if (moveMany)
+                        {
+                            // several clips keep their tracks and their distances: only the time changes
+                            double earliest = double.MaxValue;
+                            foreach (var sc in ed.SelectedClips()) earliest = Math.Min(earliest, sc.Start);
+                            double sA = Snap(raw, dragClip);
+                            manyDelta = Math.Max(-earliest, ed.Project.Snap(sA) - dragClip.Start);
+                            CheckAutoScroll();
+                            Invalidate();
+                            return;
+                        }
                         double sStart = Snap(raw, dragClip); double lineA = snapLine;
                         double sEnd = Snap(raw + dur, dragClip); double lineB = snapLine;
                         double start;
@@ -475,6 +591,8 @@ namespace StillsAndReels
             var track = ed.Project.TrackOf(c);
             if (track == null) return;
             bool magnetic = ed.MainMagnet && ReferenceEquals(track, ed.Project.Main);
+            // Shift: the clips after this one on the track follow the trimmed edge, so no gap opens and nothing is covered
+            bool ripple = !magnetic && (ModifierKeys & Keys.Shift) != 0;
             double minDur = Math.Max(ed.Project.FrameDuration, 0.1);
             bool hasSource = c.Kind == ClipKind.Video || c.Kind == ClipKind.Audio;
             var m = hasSource ? ed.Library.Find(c.MediaId) : null;
@@ -491,14 +609,16 @@ namespace StillsAndReels
                 double end = origStart + origDuration;
                 double s = Snap(t, c);
                 // how far the start can move left: the previous clip (unless the main track closes gaps) and the start of the source
-                double min = magnetic ? origStart - 3600 : prevEnd;
+                double min = magnetic || ripple ? origStart - 3600 : prevEnd;
                 if (hasSource) min = Math.Max(min, origStart - origIn / c.Speed);
-                if (!magnetic) min = Math.Max(0, min);
+                if (!magnetic && !ripple) min = Math.Max(0, min);
                 s = Math.Max(min, Math.Min(end - minDur, s));
                 s = ed.Project.Snap(s);
                 double delta = s - origStart;
-                c.Start = origStart + delta;
+                // with ripple the clip stays where it starts and everything after it moves up or back instead
+                c.Start = ripple ? origStart : origStart + delta;
                 c.Duration = origDuration - delta;
+                foreach (var kv in origLater) kv.Key.Start = ripple ? Math.Max(c.End, kv.Value - delta) : kv.Value;
                 c.In = Math.Max(0, origIn + delta * c.Speed);
                 c.Keys.Clear();
                 foreach (var k in origKeys) { var nk = k.Clone(); nk.T -= delta; c.Keys.Add(nk); }
@@ -508,11 +628,13 @@ namespace StillsAndReels
             else
             {
                 double e = Snap(t, c);
-                double max = magnetic ? double.MaxValue : nextStart;
+                double max = magnetic || ripple ? double.MaxValue : nextStart;
                 if (hasSource && srcDur > 0) max = Math.Min(max, origStart + (srcDur - origIn) / c.Speed);
                 e = Math.Max(origStart + minDur, Math.Min(max, e));
                 e = ed.Project.Snap(e);
                 c.Duration = e - origStart;
+                double moved = e - (origStart + origDuration);
+                foreach (var kv in origLater) kv.Key.Start = ripple ? kv.Value + moved : kv.Value;
             }
             ed.LiveChanged();
             Invalidate();
@@ -527,6 +649,9 @@ namespace StillsAndReels
             autoScroll.Stop();
             snapLine = double.NaN;
             if (d == Drag.Playhead) ed.EndScrub();
+            else if (d == Drag.Pending && moveMany && dragClip != null) ed.Select(dragClip, false);   // a click, not a drag
+            else if (d == Drag.Move && moveMany) ed.MoveSelection(manyDelta);
+            else if ((d == Drag.FadeIn || d == Drag.FadeOut) && trimStarted) ed.EndChange();
             else if (d == Drag.Move && dragClip != null && ghostRow != null)
             {
                 Track target = ghostRow.Track;
@@ -535,6 +660,8 @@ namespace StillsAndReels
             else if ((d == Drag.TrimLeft || d == Drag.TrimRight) && trimStarted) ed.EndChange();
             dragClip = null;
             ghostRow = null;
+            moveMany = false;
+            manyDelta = 0;
             UpdateCursor(e.Location);
             Invalidate();
         }
@@ -550,16 +677,37 @@ namespace StillsAndReels
         void UpdateCursor(Point p)
         {
             if (p.Y < RulerH || p.X < ClipLeft) { Cursor = p.Y < RulerH && p.X >= ClipLeft ? Cursors.Hand : Cursors.Default; return; }
+            foreach (var r in rows)
+            {
+                if (r.Track == null) continue;
+                foreach (var fc in r.Track.Clips)
+                {
+                    if (!FadeHandlesShown(fc, r)) continue;
+                    for (int side = 0; side < 2; side++)
+                        if (RectangleF.Inflate(FadeHandle(fc, r, side == 0), Theme.F(3), Theme.F(3)).Contains(p))
+                        {
+                            Cursor = Cursors.SizeWE;
+                            string ft = side == 0 ? "Drag to fade in" : "Drag to fade out";
+                            if (Ui.Tip.GetToolTip(this) != ft) Ui.Tip.SetToolTip(this, ft);
+                            return;
+                        }
+                }
+            }
             Edge edge; Row row;
             var c = ClipAtPoint(p, out edge, out row);
             if (c != null && row.Track.Locked) { Cursor = Cursors.No; return; }
             Cursor = c == null ? Cursors.Default : edge == Edge.Body ? Cursors.Hand : Cursors.SizeWE;
             string tip = null;
-            if (c != null) tip = ed.ClipTitle(c) + "  ·  " + VideoEditorView.Tc(c.Start) + " – " + VideoEditorView.Tc(c.End) + (edge == Edge.Body ? "" : "\nDrag to trim");
+            if (c != null) tip = ed.ClipTitle(c) + "  ·  " + VideoEditorView.Tc(c.Start) + " – " + VideoEditorView.Tc(c.End) + (edge == Edge.Body ? "" : "\nDrag to trim · hold Shift to move the clips after it too");
             if (Ui.Tip.GetToolTip(this) != tip) Ui.Tip.SetToolTip(this, tip);
         }
 
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); Ui.Tip.SetToolTip(this, null); }
+
+        RectangleF BoxRect()
+        {
+            return RectangleF.FromLTRB(Math.Min(downAt.X, boxTo.X), Math.Min(downAt.Y, boxTo.Y), Math.Max(downAt.X, boxTo.X), Math.Max(downAt.Y, boxTo.Y));
+        }
 
         void CheckAutoScroll()
         {
@@ -728,8 +876,17 @@ namespace StillsAndReels
                     var cr = ClipRect(c, r);
                     if (cr.Right < ClipLeft || cr.Left > Width) continue;
                     if (!e.ClipRectangle.IntersectsWith(Rectangle.Ceiling(RectangleF.Inflate(cr, 2, 2)))) continue; // outside the repainted area
-                    bool ghosting = drag == Drag.Move && ReferenceEquals(c, dragClip);
+                    bool ghosting = drag == Drag.Move && (moveMany ? ed.IsSelected(c) : ReferenceEquals(c, dragClip));
                     DrawClip(g, c, cr, r.Track, ghosting ? 0.35f : 1f);
+                    if (FadeHandlesShown(c, r) && drag != Drag.Move)
+                    {
+                        for (int side = 0; side < 2; side++)
+                        {
+                            var hr = FadeHandle(c, r, side == 0);
+                            using (var hb = new SolidBrush(Color.White)) g.FillEllipse(hb, hr);
+                            using (var hp = new Pen(Color.FromArgb(200, 20, 24, 40), Theme.F(1.2f))) g.DrawEllipse(hp, hr);
+                        }
+                    }
                 }
             }
             // transition badges on top of clip joins
@@ -750,8 +907,32 @@ namespace StillsAndReels
                     Icons.Draw(g, Ico.Transition, RectangleF.Inflate(br, -Theme.F(3), -Theme.F(3)), p.Text, 1.6f);
                 }
             }
+            // ghosts of several clips moving together
+            if (drag == Drag.Move && moveMany)
+            {
+                foreach (var r in rows)
+                {
+                    if (r.Track == null) continue;
+                    foreach (var c in r.Track.Clips)
+                    {
+                        if (!ed.IsSelected(c)) continue;
+                        var gr = new RectangleF(T2X(c.Start + manyDelta), r.Top, (float)(c.Duration * pps), r.Height);
+                        using (var path = Theme.Rounded(gr, Theme.F(6)))
+                        {
+                            using (var b = new SolidBrush(Color.FromArgb(70, p.AccentA))) g.FillPath(b, path);
+                            using (var b = Theme.AccentGradient(gr)) using (var pen = new Pen(b, Theme.F(2))) g.DrawPath(pen, path);
+                        }
+                    }
+                }
+            }
+            if (drag == Drag.Box)
+            {
+                var box = BoxRect();
+                using (var b = new SolidBrush(Color.FromArgb(40, p.AccentA))) g.FillRectangle(b, box);
+                using (var pen = new Pen(p.AccentA, Theme.F(1.2f)) { DashStyle = DashStyle.Dash }) g.DrawRectangle(pen, box.X, box.Y, box.Width, box.Height);
+            }
             // ghost of a moving clip
-            if (drag == Drag.Move && dragClip != null && ghostRow != null)
+            if (drag == Drag.Move && !moveMany && dragClip != null && ghostRow != null)
             {
                 var gr = new RectangleF(T2X(ghostStart), ghostRow.Top, (float)(dragClip.Duration * pps), ghostRow.Height);
                 using (var path = Theme.Rounded(gr, Theme.F(6)))
@@ -826,7 +1007,43 @@ namespace StillsAndReels
                     else g.DrawLine(pen, x, RulerH - Theme.S(5), x, RulerH - 1);
                 }
             }
+            // the marked range and the markers
+            var proj = ed.Project;
+            if (proj.HasRange)
+            {
+                float ra = T2X(proj.MarkIn), rb = T2X(proj.MarkOut);
+                using (var b = new SolidBrush(Color.FromArgb(70, p.AccentA))) g.FillRectangle(b, ra, 0, rb - ra, RulerH - 1);
+                using (var pen = new Pen(p.AccentA, Theme.F(2)))
+                {
+                    g.DrawLine(pen, ra, 0, ra, RulerH - 1); g.DrawLine(pen, ra, 1, ra + Theme.F(5), 1);
+                    g.DrawLine(pen, rb, 0, rb, RulerH - 1); g.DrawLine(pen, rb, 1, rb - Theme.F(5), 1);
+                }
+            }
+            foreach (var mk in proj.Markers)
+            {
+                float mx = T2X(mk.T), ms = Theme.F(5);
+                if (mx < ClipLeft - ms || mx > Width + ms) continue;
+                using (var b = new SolidBrush(Color.FromArgb(255, 255, 200, 70)))
+                    g.FillPolygon(b, new[] { new PointF(mx - ms, Theme.F(2)), new PointF(mx + ms, Theme.F(2)), new PointF(mx + ms, Theme.F(8)), new PointF(mx, Theme.F(14)), new PointF(mx - ms, Theme.F(8)) });
+                if (!string.IsNullOrEmpty(mk.Name))
+                {
+                    // on its own patch, so it reads over the ruler's numbers
+                    var ts = TextRenderer.MeasureText(mk.Name, Font, Size.Empty, TextFormatFlags.NoPrefix);
+                    var tr = new Rectangle((int)(mx + ms + 2), Theme.S(1), ts.Width, Theme.S(16));
+                    using (var b = new SolidBrush(p.Bar)) g.FillRectangle(b, tr);
+                    TextRenderer.DrawText(g, mk.Name, Font, tr, Color.FromArgb(255, 255, 200, 70), TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter);
+                }
+            }
             g.Restore(st2);
+            // markers run down through the tracks as faint lines
+            if (proj.Markers.Count > 0)
+            {
+                var st4 = g.Save();
+                g.SetClip(clipArea);
+                using (var pen = new Pen(Color.FromArgb(90, 255, 200, 70), 1f) { DashStyle = DashStyle.Dot })
+                    foreach (var mk in proj.Markers) { float mx = T2X(mk.T); g.DrawLine(pen, mx, RulerH, mx, Height - ScrollBarH); }
+                g.Restore(st4);
+            }
             TextRenderer.DrawText(g, VideoEditorView.Tc(ed.Playhead), Theme.UiFont(9f, FontStyle.Bold), new Rectangle(Theme.S(10), 0, HeaderW - Theme.S(12), RulerH), p.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 

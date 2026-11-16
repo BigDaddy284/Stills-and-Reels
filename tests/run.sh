@@ -1,8 +1,8 @@
 #!/bin/bash
 # Builds the app and runs the Linux tests (Mono, Xvfb, openbox, system ffmpeg, Python 3 with Pillow for fixtures).
-#   tests/run.sh            quick set: logic, pickup, picture, compositor, project, sound, export, scrub
+#   tests/run.sh            quick set: logic, pickup, picture, compose, project, sound, export, formats, scrub
 #   tests/run.sh all        adds the window tests (close, hide, snip windows, theme) and the recording finish test
-#   tests/run.sh <name>...  only the named tests (logic pickup picture compose sound export scrub play close hide snip sniptools theme finish bench shots)
+#   tests/run.sh <name>...  only the named tests (logic pickup picture compose project sound export formats scrub play close hide snip sniptools theme finish bench shots)
 #                           bench times the compositor; shots writes screenshots of the editor to $SR_WORK/shots
 # The recording sync tests (AvSyncTest) are run by hand: see the comment at the top of tests/AvSyncTest.cs.
 set -u
@@ -62,7 +62,9 @@ t_logic()   { compile logic && run logic mono "$WORK/logic.exe"; }
 t_pickup()  { compile pickup && run pickup mono "$WORK/pickup.exe" "$SR_EXE"; }
 t_picture() { compile PictureTest -main:PictureTest $WITH_SRC && run picture mono "$WORK/PictureTest.exe" "$WORK"; }
 t_compose() { [ -f tests/ComposeTest.cs ] || return 0; compile ComposeTest -main:ComposeTest $WITH_SRC && run compose mono "$WORK/ComposeTest.exe"; }
+t_project() { compile ProjectTest -main:ProjectTest $WITH_SRC && run project mono "$WORK/ProjectTest.exe" "$WORK"; }
 t_sound()   { compile SoundTest -main:SoundTest $WITH_SRC && run sound mono "$WORK/SoundTest.exe" "$WORK"; }
+t_formats() { compile ExportFormatsTest -main:ExportFormatsTest $WITH_SRC && run formats mono "$WORK/ExportFormatsTest.exe" "$WORK"; }
 t_export()  {
   compile ExportTest || return
   run export mono "$WORK/ExportTest.exe" "$SR_EXE" "$WORK/src1080.mp4" "$WORK/out.mp4" 1920 1080 30 18
@@ -83,8 +85,8 @@ t_bench()   { [ -f tests/Bench.cs ] || return 0; compile Bench -main:Bench $WITH
 t_shots()   { compile UiShot -main:UiShot $WITH_SRC -resource:engine/ffmpeg.exe.gz,StillsAndReels.ffmpeg.exe.gz -resource:app.ico,StillsAndReels.app.ico && { timeout 120 mono "$WORK/UiShot.exe" "$WORK" > "$WORK/shots.log" 2>&1; pkill -f "$WORK/engine" 2>/dev/null; echo "$(grep -c wrote "$WORK/shots.log") screenshots in $WORK/shots"; } 2>/dev/null; }
 
 fixtures
-SET="${*:-logic pickup picture compose sound export scrub}"
-[ "$SET" = "all" ] && SET="logic pickup picture compose sound export scrub play close hide snip sniptools theme finish"
+SET="${*:-logic pickup picture compose project sound export formats scrub}"
+[ "$SET" = "all" ] && SET="logic pickup picture compose project sound export formats scrub play close hide snip sniptools theme finish"
 for t in $SET; do "t_$t"; done
 if [ -n "$FAILED" ]; then echo "FAILED:$FAILED"; exit 1; fi
 echo "ALL TESTS PASSED ($SET)"

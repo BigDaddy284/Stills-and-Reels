@@ -50,6 +50,10 @@ static class UiShot
         var texts = new Track { Id = p.NewId(), Kind = TrackKind.Video };
         var title = VideoEditorView.TextPreset("gradient"); title.Id = p.NewId(); title.Start = 0.5; title.Duration = 4; title.Text = "Stills & Reels 3";
         texts.Clips.Add(title); p.Tracks.Add(texts);
+        p.MarkIn = 1.5; p.MarkOut = 6;
+        p.Markers.Add(new Marker { T = 3, Name = "beat" }); p.Markers.Add(new Marker { T = 7.5, Name = "" });
+        pip.FadeIn = 0.6; pip.FadeOut = 0.4;
+        pip.Keys.Add(new Keyframe { T = 0, X = 0.28, Y = -0.26, Scale = 0.35, Opacity = 1 }); pip.Keys.Add(new Keyframe { T = 3, X = 0.2, Y = -0.2, Scale = 0.4, Opacity = 1, Curve = 6 });
         string proj = Path.Combine(work, "ui-shot.srproj");
         p.Save(proj);
 
@@ -93,6 +97,23 @@ static class UiShot
             Pump(900);
             Shot(Path.Combine(outDir, "1x-left-" + page + ".png"));
         }
+        // the export window
+        try
+        {
+            var dlg = new ExportForm(project.Clone(), new Dictionary<int, MediaItem>(), "ui-shot", new List<string>());
+            dlg.StartPosition = FormStartPosition.Manual;
+            dlg.Location = new Point(420, 120);
+            dlg.Show(main);
+            Pump(1500);
+            Shot(Path.Combine(outDir, "20-export.png"));
+            var kind = (Segmented)typeof(ExportForm).GetField("kind", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(dlg);
+            kind.Selected = "gif";
+            typeof(ExportForm).GetMethod("Sync", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(dlg, null);
+            Pump(400);
+            Shot(Path.Combine(outDir, "21-export-gif.png"));
+            dlg.Close();
+        }
+        catch (Exception ex) { Console.WriteLine("export: " + ex); }
         // decoders and the engine's child processes would keep an ordinary exit waiting
         Console.Out.Flush();
         Process.GetCurrentProcess().Kill();

@@ -630,11 +630,34 @@ namespace StillsAndReels
             }
         }
 
+        /// <summary>Start again from the beginning when the end is reached.</summary>
+        public bool Loop { get { return loop; } set { loop = value; Raise(); } }
+        bool loop;
+
+        /// <summary>Pauses and moves by whole frames (negative = back).</summary>
+        public void StepFrames(int n)
+        {
+            if (Info == null || !Info.HasVideo) return;
+            double fd = 1.0 / (Info.Fps > 1 ? Info.Fps : 30);
+            double t = Position;
+            if (playing) Pause();
+            // land in the middle of the frame wanted, so rounding can't show its neighbour
+            double k = Math.Floor(t / fd + 1e-3) + n;
+            Seek(Math.Max(0, k * fd + fd * 0.01));
+        }
+
         void OnSessionEnded(PlaybackSession s)
         {
             ui.Post(_ =>
             {
                 if (!ReferenceEquals(s, session)) return;
+                if (loop && Info != null && Info.Duration > 0.2)
+                {
+                    position = 0;
+                    StartSession(0);
+                    Raise();
+                    return;
+                }
                 position = Info != null && Info.Duration > 0 ? Info.Duration : s.Position;
                 StopSession();
                 playing = false;

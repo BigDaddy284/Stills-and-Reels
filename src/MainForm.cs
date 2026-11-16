@@ -215,6 +215,8 @@ namespace StillsAndReels
             if (!string.IsNullOrEmpty(startupFile) && File.Exists(startupFile)) { OpenAny(startupFile); startupFile = null; }
             UpdateUi();
             Shortcuts.WriteJumpList();
+            // a video project left open by a crash is offered back (not when the app was started just to snip)
+            if (startSnip == null) BeginInvoke((Action)(() => editor.OfferRecovery(EnterVideoEdit)));
             if (startSnip != null && !startSnipOpened)
             {
                 startSnipOpened = true;
@@ -340,6 +342,9 @@ namespace StillsAndReels
             miCopyPath = Item("Copy file &path", Keys.None, (s, e) => CopyPath());
             miNewProject = Item("&New video project", Keys.None, (s, e) => { EnterVideoEdit(); editor.NewProject(); });
             miOpenProject = Item("Open video pro&ject…", Keys.None, (s, e) => { EnterVideoEdit(); editor.OpenProjectDialog(); });
+            var miRecentProjects = new ToolStripMenuItem("Recent video projects");
+            miRecentProjects.DropDownItems.Add(new ToolStripMenuItem("…"));   // filled as it opens
+            miRecentProjects.DropDownOpening += (s, e) => { editor.FillRecentMenu(miRecentProjects.DropDownItems, EnterVideoEdit); Theme.StyleMenu(miRecentProjects.DropDown); };
             miSaveProject = Item("Save video p&roject", Keys.None, (s, e) => editor.SaveProject(false), "Ctrl+S");
             miSaveProjectAs = Item("Save video project as…", Keys.None, (s, e) => editor.SaveProject(true));
             miImport = Item("&Import media…", Keys.None, (s, e) => { EnterVideoEdit(); editor.ImportDialog(); }, "Ctrl+I");
@@ -349,7 +354,7 @@ namespace StillsAndReels
                 Item("&Open…", Keys.Control | Keys.O, (s, e) => OpenDialog()),
                 miSaveAs,
                 new ToolStripSeparator(),
-                miNewProject, miOpenProject, miSaveProject, miSaveProjectAs, miImport, miExport,
+                miNewProject, miOpenProject, miRecentProjects, miSaveProject, miSaveProjectAs, miImport, miExport,
                 new ToolStripSeparator(),
                 miOpenDefault, miShowInExplorer, miCopyPath,
                 new ToolStripSeparator(),
@@ -1658,6 +1663,10 @@ namespace StillsAndReels
                     case Keys.Right: SeekBy(5); return true;
                     case Keys.J: SeekBy(-10); return true;
                     case Keys.L: SeekBy(10); return true;
+                    case Keys.Oemcomma: p.StepFrames(-1); return true;
+                    case Keys.OemPeriod: p.StepFrames(1); return true;
+                    case Keys.R: p.Loop = !p.Loop; Flash(p.Loop ? "Repeat on" : "Repeat off"); return true;
+                    case Keys.S: videoView.SaveFrame(); return true;
                     case Keys.Up: p.Volume = Math.Min(1, p.Volume + 0.05f); p.Muted = false; return true;
                     case Keys.Down: p.Volume = Math.Max(0, p.Volume - 0.05f); return true;
                     case Keys.M: p.Muted = !p.Muted; return true;

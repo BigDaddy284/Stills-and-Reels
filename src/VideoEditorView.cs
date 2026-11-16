@@ -127,6 +127,8 @@ namespace StillsAndReels
             preview.Presented = OnPlayTick;
             renderTimer.Tick += (s, e) => { renderTimer.Stop(); RenderNow(); };
             restartTimer.Tick += (s, e) => { restartTimer.Stop(); if (IsPlaying) { double t = playback.Position; StopPlayback(); playhead = t; StartPlayback(); } };
+            autosaveTimer.Tick += (s, e) => Autosave();
+            autosaveTimer.Start();
             AllowDrop = true;
             Theme.Changed += OnTheme;
             Rebuild();
@@ -140,7 +142,7 @@ namespace StillsAndReels
                 StopPlayback();
                 still.Dispose();
                 Library.Dispose();
-                playTimer.Dispose(); renderTimer.Dispose(); restartTimer.Dispose();
+                playTimer.Dispose(); renderTimer.Dispose(); restartTimer.Dispose(); autosaveTimer.Dispose();
                 if (filterSource != null) filterSource.Dispose();
             }
             base.Dispose(disposing);
@@ -400,6 +402,15 @@ namespace StillsAndReels
             OnSelectionChanged();
         }
 
+        /// <summary>Makes exactly these clips the selection (used while dragging a box over the timeline).</summary>
+        public void SelectIds(HashSet<int> ids)
+        {
+            if (selection.SetEquals(ids)) return;
+            selection.Clear();
+            foreach (var id in ids) selection.Add(id);
+            OnSelectionChanged();
+        }
+
         public void SelectAll()
         {
             selection.Clear();
@@ -476,6 +487,8 @@ namespace StillsAndReels
         {
             var pts = new SortedSet<double> { 0, project.Duration };
             foreach (var c in project.AllClips()) { pts.Add(Math.Round(c.Start, 4)); pts.Add(Math.Round(c.End, 4)); }
+            foreach (var m in project.Markers) pts.Add(Math.Round(m.T, 4));
+            if (project.HasRange) { pts.Add(Math.Round(project.MarkIn, 4)); pts.Add(Math.Round(project.MarkOut, 4)); }
             double target = dir > 0 ? pts.Where(x => x > playhead + 1e-3).DefaultIfEmpty(project.Duration).Min()
                                     : pts.Where(x => x < playhead - 1e-3).DefaultIfEmpty(0).Max();
             SeekTo(target);
@@ -1034,6 +1047,130 @@ namespace StillsAndReels
                 nt.Clips.Add(c);
             }
             Changed();
+        }
+
+        /// <summary>Moves every selected clip by the same time, each on its own track; one that would land on another clip goes to a free track.</summary>
+        public void MoveSelection(double delta)
+        {
+            var list = SelectedClips().Where(c => !project.TrackOf(c).Locked && !(mainMagnet && ReferenceEquals(project.TrackOf(c), project.Main))).ToList();
+            if (list.Count == 0) { if (Math.Abs(delta) > 1e-6) Say("Clips on the main track stay in line – turn the magnet off to move them freely"); return; }
+            delta = Math.Max(delta, -list.Min(c => c.Start));
+            if (Math.Abs(delta) < 1e-6) return;
+            StopPlayback();
+            BeginChange(null);
+            var moving = new HashSet<Clip>(list);
+            foreach (var c in list) c.Start = project.Snap(c.Start + delta);
+            foreach (var c in list)
+            {
+                var tr = project.TrackOf(c);
+                bool clash = tr.Clips.Any(o => !moving.Contains(o) && c.Start < o.End - 1e-6 && c.End > o.Start + 1e-6);
+                if (!clash) continue;
+                tr.Clips.Remove(c);
+                FreeTrack(tr.Kind, c.Start, c.End).Clips.Add(c);
+            }
+            Changed();
+        }
+
+        // ================================================================== marked range and markers
+
+        /// <summary>Marks where the range starts (or ends) at the playhead. The range is what "Marked range" exports.</summary>
+        public void SetMark(bool start)
+        {
+            double t = project.Snap(playhead);
+            BeginChange(null);
+            if (start)
+            {
+                project.MarkIn = t;
+                if (project.MarkOut <= t + 0.01) project.MarkOut = project.Duration;
+            }
+            else
+            {
+                project.MarkOut = t;
+                if (project.MarkIn >= t - 0.01) project.MarkIn = 0;
+            }
+            if (!project.HasRange) { project.MarkIn = project.MarkOut = 0; Say("Move the playhead to mark a range"); }
+            else Say("Range marked: " + Tc(project.MarkIn) + " to " + Tc(project.MarkOut) + " – Export can save just this part");
+            Changed();
+        }
+
+        public void ClearMarks()
+        {
+            if (!project.HasRange) return;
+            BeginChange(null);
+            project.MarkIn = project.MarkOut = 0;
+            Changed();
+            Say("Range cleared");
+        }
+
+        /// <summary>Adds a marker at the playhead, or removes the one that is there.</summary>
+        public void ToggleMarker()
+        {
+            double t = project.Snap(playhead);
+            BeginChange(null);
+            var at = project.Markers.Find(m => Math.Abs(m.T - t) < project.FrameDuration * 0.6);
+            if (at != null) { project.Markers.Remove(at); Say("Marker removed"); }
+            else
+            {
+                project.Markers.Add(new Marker { T = t, Name = "" });
+                project.Markers.Sort((a, b) => a.T.CompareTo(b.T));
+                Say("Marker added – clips and the playhead snap to it");
+            }
+            Changed();
+        }
+
+        public void ShowRulerMenu(Point screen, double t, double tolerance)
+        {
+            var menu = new ContextMenuStrip();
+            var near = project.Markers.Find(m => Math.Abs(m.T - t) <= tolerance);
+            if (near != null)
+            {
+                menu.Items.Add(new ToolStripMenuItem("Go to this marker", null, (s, e) => SeekTo(near.T)));
+                menu.Items.Add(new ToolStripMenuItem("Name this marker…", null, (s, e) =>
+                {
+                    string name = PicDialog.AskText(FindForm(), "Marker", "Name for this marker", near.Name ?? "");
+                    if (name == null) return;
+                    BeginChange(null); near.Name = name.Trim(); Changed();
+                }));
+                menu.Items.Add(new ToolStripMenuItem("Remove this marker", null, (s, e) => { BeginChange(null); project.Markers.Remove(near); Changed(); }));
+            }
+            else menu.Items.Add(new ToolStripMenuItem("Add a marker here", null, (s, e) => { Scrub(project.Snap(t)); ToggleMarker(); }) { ShortcutKeyDisplayString = "Shift+M" });
+            if (project.Markers.Count > 0)
+                menu.Items.Add(new ToolStripMenuItem("Remove all markers", null, (s, e) => { BeginChange(null); project.Markers.Clear(); Changed(); }));
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(new ToolStripMenuItem("Start the range here", null, (s, e) => { Scrub(project.Snap(t)); SetMark(true); }) { ShortcutKeyDisplayString = "I" });
+            menu.Items.Add(new ToolStripMenuItem("End the range here", null, (s, e) => { Scrub(project.Snap(t)); SetMark(false); }) { ShortcutKeyDisplayString = "O" });
+            menu.Items.Add(new ToolStripMenuItem("Clear the range", null, (s, e) => ClearMarks()) { Enabled = project.HasRange, ShortcutKeyDisplayString = "Ctrl+Shift+X" });
+            Theme.StyleMenu(menu);
+            menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
+            menu.Show(screen);
+        }
+
+        /// <summary>Sets how the clip travels to the keyframe at the playhead (or, away from one, to every keyframe).</summary>
+        void ShowCurveMenu(Control anchor, int clipId)
+        {
+            var c = project.FindClip(clipId);
+            if (c == null || !c.HasKeys) return;
+            var at = c.KeyAt(playhead, project.FrameDuration * 0.5);
+            var arriving = c.Keys.Count > 1 ? c.Keys.Skip(1).ToList() : c.Keys;
+            int current = at != null ? at.CurveKind : arriving.Select(k => k.CurveKind).Distinct().Count() == 1 ? arriving[0].CurveKind : 0;
+            var menu = new ContextMenuStrip();
+            for (int i = 1; i < Keyframe.CurveNames.Length; i++)
+            {
+                int kind = i;
+                menu.Items.Add(new ToolStripMenuItem(Keyframe.CurveNames[i], null, (s, e) =>
+                {
+                    var cc = project.FindClip(clipId);
+                    if (cc == null) return;
+                    BeginChange(null);
+                    var k = cc.KeyAt(playhead, project.FrameDuration * 0.5);
+                    if (k != null) k.Curve = kind; else foreach (var x in cc.Keys) x.Curve = kind;
+                    propsFor = -2;
+                    Changed();
+                }) { Checked = current == kind });
+            }
+            Theme.StyleMenu(menu);
+            menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
+            Ui.ShowMenuBelow(menu, anchor);
         }
 
         IEnumerable<Clip> TargetsAtPlayhead()
@@ -1738,13 +1875,88 @@ namespace StillsAndReels
 
         public bool ConfirmClose()
         {
-            if (!IsDirty) return true;
+            if (!IsDirty) { ForgetRecovery(); return true; }
             StopPlayback();
             var r = MessageBox.Show(FindForm(), "Save changes to the video project \"" + ProjectName + "\"?", "Video editor",
                 MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (r == DialogResult.Cancel) return false;
             if (r == DialogResult.Yes) return SaveProject(false);
+            ForgetRecovery();
             return true;
+        }
+
+        // ---- recovery copy (see ProjectRecovery)
+
+        readonly System.Windows.Forms.Timer autosaveTimer = new System.Windows.Forms.Timer { Interval = 45000 };
+        int autosavedVersion;
+        bool autosaving;
+
+        /// <summary>The project is safe (saved) or given up on purpose: the recovery copy isn't needed.</summary>
+        void ForgetRecovery()
+        {
+            autosavedVersion = version;
+            ThreadPool.QueueUserWorkItem(_ => ProjectRecovery.Clear());
+        }
+
+        /// <summary>Every 45 seconds: if the project changed since it was last saved or copied, write the recovery copy in the background.</summary>
+        void Autosave()
+        {
+            if (autosaving || IsDisposed || project.IsEmpty || !IsDirty || version == autosavedVersion) return;
+            var snap = project.Clone();
+            snap.Media.Clear();
+            var temporary = new HashSet<int>();
+            foreach (var id in snap.AllClips().Where(c => c.Kind != ClipKind.Text).Select(c => c.MediaId).Distinct())
+            {
+                var m = Library.Find(id);
+                if (m == null) continue;
+                snap.Media.Add(new MediaRef { Id = m.Id, Path = m.OriginalPath, Name = m.Name });
+                if (m.Temporary) temporary.Add(m.Id);
+            }
+            string savedAs = projectPath;
+            int v = version;
+            autosaving = true;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool ok = false;
+                try { ProjectRecovery.Write(snap, temporary, savedAs); ok = true; } catch { }
+                Post(() => { autosaving = false; if (ok) autosavedVersion = v; });
+                if (IsDisposed) autosaving = false;
+            });
+        }
+
+        /// <summary>
+        /// At start-up: if a copy of the app stopped without closing its project, offer the project back.
+        /// enterEditor switches the window to the video editor.
+        /// </summary>
+        public void OfferRecovery(Action enterEditor)
+        {
+            // under Mono (development and tests) a question box at start-up would stop automated runs
+            if (!FFmpeg.IsWindows && Environment.GetEnvironmentVariable("SR_RECOVERY") == null) return;
+            var left = ProjectRecovery.FindLeftBehind();
+            if (left.Count == 0) return;
+            string folder = left[0];
+            var when = ProjectRecovery.SavedAt(folder);
+            var r = MessageBox.Show(FindForm(),
+                "Stills & Reels closed unexpectedly while a video project was open.\n\nRestore the project as it was at " + when.ToString("HH:mm") + " on " + when.ToString("d MMMM") + "?\n\nNo discards the recovered copy.",
+                "Recover video project", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (r == DialogResult.Yes)
+            {
+                try
+                {
+                    string savedAs; HashSet<string> temporary;
+                    var p = ProjectRecovery.Read(folder, out savedAs, out temporary);
+                    enterEditor();
+                    Adopt(p, savedAs, temporary);
+                    version = 1;   // different from the saved state: it asks to be saved
+                    RaiseState();
+                    Say("Project recovered" + (savedAs != null ? " – save it to keep these changes" : " – save it to keep it"));
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(FindForm(), "The recovered project couldn't be opened:\n" + ex.Message, "Recover video project", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            foreach (var f in left) ProjectRecovery.Discard(f);
         }
 
         public void NewProject()
@@ -1755,6 +1967,7 @@ namespace StillsAndReels
             projectPath = null;
             undo.Clear(); redo.Clear();
             version = savedVersion = 0;
+            ForgetRecovery();
             selection.Clear();
             playhead = 0;
             propsFor = -2;
@@ -1790,6 +2003,8 @@ namespace StillsAndReels
                 project.Save(path);
                 projectPath = path;
                 savedVersion = version;
+                ForgetRecovery();
+                RecentProjects.Add(path);
                 RaiseState();
                 Say("Saved " + Path.GetFileName(path));
                 return true;
@@ -1842,6 +2057,17 @@ namespace StillsAndReels
                 MessageBox.Show(FindForm(), "Couldn't open the project:\n" + ex.Message, "Video editor", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
+            int missing = Adopt(p, path, null);
+            RecentProjects.Add(path);
+            Say("Opened " + Path.GetFileName(path) + (missing > 0 ? " – " + missing + " file" + (missing == 1 ? " is" : "s are") + " missing (right-click them in Media to locate)" : ""));
+        }
+
+        /// <summary>
+        /// Makes a loaded project the one being edited. temporary lists media files (by path) that live in the cache
+        /// and so must be copied next to the project when it is saved. Returns how many media files are missing.
+        /// </summary>
+        int Adopt(Project p, string path, HashSet<string> temporary)
+        {
             StopPlayback();
             // map the project's media onto the bin (reusing items already there)
             var map = new Dictionary<int, int>();
@@ -1852,7 +2078,7 @@ namespace StillsAndReels
                 if (m == null)
                 {
                     int id = Library.Find(r.Id) == null ? r.Id : 0;
-                    m = Library.Add(r.Path, id);
+                    m = Library.Add(r.Path, id, temporary != null && temporary.Contains(r.Path));
                 }
                 if (m.Status == MediaStatus.Missing) missing++;
                 map[r.Id] = m.Id;
@@ -1871,13 +2097,34 @@ namespace StillsAndReels
             projectPath = path;
             undo.Clear(); redo.Clear();
             version = savedVersion = 0;
+            autosavedVersion = 0;
             selection.Clear();
             playhead = 0;
             propsFor = -2;
             Normalize();
+            Library.WarmSound(project);
             Timeline.FitAll();
             RefreshAll();
-            Say("Opened " + Path.GetFileName(path) + (missing > 0 ? " – " + missing + " file" + (missing == 1 ? " is" : "s are") + " missing (right-click them in Media to locate)" : ""));
+            return missing;
+        }
+
+        /// <summary>The recent video projects, for menus: file name and folder, newest first.</summary>
+        public void FillRecentMenu(ToolStripItemCollection items, Action beforeOpen)
+        {
+            items.Clear();
+            var list = RecentProjects.List();
+            foreach (var path in list)
+            {
+                string p = path;
+                items.Add(new ToolStripMenuItem(Path.GetFileNameWithoutExtension(p).Replace("&", "&&") + "   –   " + Path.GetDirectoryName(p).Replace("&", "&&"), null,
+                    (s, e) => { if (beforeOpen != null) beforeOpen(); OpenProject(p); }));
+            }
+            if (list.Count == 0) items.Add(new ToolStripMenuItem("No recent projects") { Enabled = false });
+            else
+            {
+                items.Add(new ToolStripSeparator());
+                items.Add(new ToolStripMenuItem("Clear this list", null, (s, e) => RecentProjects.Clear()));
+            }
         }
 
         // ================================================================== export, frames, captions
@@ -2091,6 +2338,10 @@ namespace StillsAndReels
                 case Keys.Shift | Keys.Delete: DeleteSelected(true); return true;
                 case Keys.Control | Keys.B: SplitSelected(); return true;
                 case Keys.S: SplitSelected(); return true;
+                case Keys.I: SetMark(true); return true;
+                case Keys.O: SetMark(false); return true;
+                case Keys.Control | Keys.Shift | Keys.X: ClearMarks(); return true;
+                case Keys.Shift | Keys.M: ToggleMarker(); return true;
                 case Keys.Q: TrimToPlayhead(true); return true;
                 case Keys.W: TrimToPlayhead(false); return true;
                 case Keys.Control | Keys.D: DuplicateSelected(); return true;
@@ -2588,8 +2839,20 @@ namespace StillsAndReels
             var mag = new ThemedToggle { Text = "Main track magnet (no gaps)", Checked = mainMagnet };
             mag.CheckedChanged += (s, e) => { if (mag.Checked != mainMagnet) ToggleMainMagnet(); };
             P(mag);
+            if (project.IsEmpty)
+            {
+                var recent = RecentProjects.List();
+                if (recent.Count > 0) Section("Recent projects");
+                foreach (var path in recent.Take(4))
+                {
+                    string rp = path;
+                    var rb = Btn(Path.GetFileNameWithoutExtension(rp), Ico.Folder, rp, () => OpenProject(rp));
+                    rb.AlignLeft = true;
+                    P(new ButtonRow(rb));
+                }
+            }
             Section("Tips");
-            HintP("Click a clip in the timeline to edit it here.\nSpace plays · ← → step a frame · Ctrl+B splits · Del deletes · Ctrl+wheel zooms the timeline.");
+            HintP("Click a clip in the timeline to edit it here.\nSpace plays · ← → step a frame · S splits · Q and W trim to the playhead · Del deletes · I and O mark a range · Shift+M adds a marker · Ctrl+wheel zooms the timeline.");
             P(new ButtonRow(Btn("Export…", Ico.Export, "Export the video (Ctrl+M)", Export, true)));
         }
 
@@ -2687,6 +2950,17 @@ namespace StillsAndReels
                 Btn(null, Ico.ChevronLeft, "Previous keyframe", () => JumpKey(-1)),
                 Btn("Keyframe", Ico.Diamond, "Add or remove a keyframe at the playhead (Ctrl+K). With keyframes, changes animate between them.", ToggleKeyframe),
                 Btn(null, Ico.ChevronRight, "Next keyframe", () => JumpKey(1))));
+            if (c.HasKeys)
+            {
+                var atKey = c.KeyAt(playhead, project.FrameDuration * 0.5);
+                // the first keyframe has nothing travelling to it, so its own setting doesn't count
+                var arriving = c.Keys.Count > 1 ? c.Keys.Skip(1).ToList() : c.Keys;
+                bool same = arriving.Select(k => k.CurveKind).Distinct().Count() == 1;
+                string curve = atKey != null ? Keyframe.CurveNames[atKey.CurveKind] : same ? Keyframe.CurveNames[arriving[0].CurveKind] : "Mixed";
+                ThemedButton cb = null;
+                cb = Btn("Motion: " + curve, Ico.None, atKey != null ? "How the clip travels to this keyframe from the one before" : "How the clip travels between its keyframes (put the playhead on a keyframe to change just that one)", () => ShowCurveMenu(cb, id));
+                P(new ButtonRow(cb));
+            }
             if (c.HasKeys)
                 P(new ButtonRow(Btn("Remove all keyframes", Ico.Trash, "Stop animating this clip", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); var p = cc.PlacementAt(playhead); cc.Keys.Clear(); cc.X = p.X; cc.Y = p.Y; cc.Scale = p.Scale; cc.Rotation = p.Rotation; cc.Opacity = p.Opacity; propsFor = -2; Changed(); })));
             if (c.Kind != ClipKind.Text)

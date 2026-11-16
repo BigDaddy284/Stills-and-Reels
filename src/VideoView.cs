@@ -141,12 +141,13 @@ namespace StillsAndReels
     internal sealed class VideoControls : Control
     {
         readonly VideoPlayer player;
-        Rectangle rPlay, rTrack, rTime, rSpeed, rMute, rVolume, rFull;
+        Rectangle rPlay, rTrack, rTime, rSpeed, rMute, rVolume, rFull, rLoop, rShot;
         string hover;
         bool scrubbing, volDrag;
         double scrubTime = -1;
         public bool Fullscreen;
         public event EventHandler FullscreenRequested;
+        public event EventHandler SnapshotRequested;
         readonly Timer tick = new Timer { Interval = 100 };
 
         public VideoControls(VideoPlayer player)
@@ -193,11 +194,16 @@ namespace StillsAndReels
             rVolume = new Rectangle(rFull.Left - Theme.S(10) - Theme.S(96), y, Theme.S(96), b);
             rMute = new Rectangle(rVolume.Left - Theme.S(2) - b, y, b, b);
             rSpeed = new Rectangle(rMute.Left - Theme.S(8) - Theme.S(54), y, Theme.S(54), b);
+            // repeat and save-frame join the bar when there is room for them and a usable timeline
+            bool roomy = Width > Theme.S(620);
+            rLoop = roomy ? new Rectangle(rSpeed.Left - Theme.S(6) - b, y, b, b) : Rectangle.Empty;
+            rShot = roomy ? new Rectangle(rLoop.Left - Theme.S(2) - b, y, b, b) : Rectangle.Empty;
+            int rightOfTrack = roomy ? rShot.Left : rSpeed.Left;
             var tf = Theme.UiFont(10f);
             string sample = FormatTime(player.Duration, player.Duration) + " / " + FormatTime(player.Duration, player.Duration);
             int tw = TextRenderer.MeasureText(sample, tf).Width + Theme.S(8);
             rTime = new Rectangle(rPlay.Right + Theme.S(10), y, tw, b);
-            rTrack = new Rectangle(rTime.Right + Theme.S(10), y, Math.Max(Theme.S(40), rSpeed.Left - Theme.S(14) - rTime.Right - Theme.S(10)), b);
+            rTrack = new Rectangle(rTime.Right + Theme.S(10), y, Math.Max(Theme.S(40), rightOfTrack - Theme.S(14) - rTime.Right - Theme.S(10)), b);
         }
 
         string HitTest(Point p)
@@ -205,6 +211,8 @@ namespace StillsAndReels
             if (rPlay.Contains(p)) return "play";
             if (rTrack.Contains(p)) return "track";
             if (rSpeed.Contains(p)) return "speed";
+            if (rLoop.Contains(p)) return "loop";
+            if (rShot.Contains(p)) return "shot";
             if (rMute.Contains(p)) return "mute";
             if (rVolume.Contains(p)) return "volume";
             if (rFull.Contains(p)) return "full";
@@ -249,6 +257,8 @@ namespace StillsAndReels
                     case "play": tip = player.IsPlaying ? "Pause (Space)" : "Play (Space)"; break;
                     case "track": tip = "Drag to move through the video (← → jump 5 s)"; break;
                     case "speed": tip = "Playback speed"; break;
+                    case "loop": tip = player.Loop ? "Repeat is on: the video starts again at the end (R)" : "Repeat: start again at the end (R)"; break;
+                    case "shot": tip = "Save this frame as a picture (S) · , and . step one frame"; break;
                     case "mute": tip = player.Muted ? "Unmute (M)" : "Mute (M)"; break;
                     case "volume": tip = "Volume (↑ ↓)"; break;
                     case "full": tip = Fullscreen ? "Exit full screen (Esc)" : "Full screen (F)"; break;
@@ -301,11 +311,13 @@ namespace StillsAndReels
                 case "play": player.Toggle(); break;
                 case "mute": player.Muted = !player.Muted; break;
                 case "speed": ShowSpeedMenu(); break;
+                case "loop": player.Loop = !player.Loop; break;
+                case "shot": { var h = SnapshotRequested; if (h != null) h(this, EventArgs.Empty); break; }
                 case "full": { var h = FullscreenRequested; if (h != null) h(this, EventArgs.Empty); break; }
             }
         }
 
-        public static readonly double[] Speeds = { 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2 };
+        public static readonly double[] Speeds = { 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4 };
 
         void ShowSpeedMenu()
         {
@@ -384,6 +396,18 @@ namespace StillsAndReels
             TextRenderer.DrawText(g, SpeedText, Theme.UiFont(10f, FontStyle.Bold), Rectangle.Round(sr), fg,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
+            // repeat and save frame
+            if (!rLoop.IsEmpty)
+            {
+                bool video = has && player.Info.HasVideo;
+                if (player.Loop || (hover == "loop" && has))
+                    using (var path = Theme.Rounded(rLoop, Theme.F(8))) using (var b = new SolidBrush(player.Loop ? Color.FromArgb(p.Dark ? 70 : 45, p.AccentA) : p.Hover)) g.FillPath(b, path);
+                Icons.Draw(g, Ico.Refresh, RectangleF.Inflate(rLoop, -Theme.F(10), -Theme.F(10)), player.Loop ? p.Text : has ? p.SubText : p.Muted, 1.7f);
+                if (hover == "shot" && video)
+                    using (var path = Theme.Rounded(rShot, Theme.F(8))) using (var b = new SolidBrush(p.Hover)) g.FillPath(b, path);
+                Icons.Draw(g, Ico.Picture, RectangleF.Inflate(rShot, -Theme.F(10), -Theme.F(10)), video ? p.SubText : p.Muted, 1.7f);
+            }
+
             // mute + volume
             if (hover == "mute" && has)
                 using (var path = Theme.Rounded(rMute, Theme.F(8))) using (var b = new SolidBrush(p.Hover)) g.FillPath(b, path);
@@ -410,6 +434,37 @@ namespace StillsAndReels
     /// <summary>Videos mode: surface on top, controls at the bottom.</summary>
     internal sealed class VideoView : Control
     {
+        /// <summary>Saves the frame being shown as a picture, at the video's own size. The video itself is only read.</summary>
+        public void SaveFrame()
+        {
+            var info = Player.Info;
+            if (info == null || !info.HasVideo) return;
+            bool was = Player.IsPlaying;
+            if (was) Player.Pause();
+            double t = Player.Position;
+            using (var dlg = new SaveFileDialog { Title = "Save this frame", Filter = "PNG picture (*.png)|*.png|JPEG picture (*.jpg)|*.jpg", AddExtension = true, DefaultExt = "png" })
+            {
+                try { dlg.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures); } catch { }
+                dlg.FileName = System.IO.Path.GetFileNameWithoutExtension(info.Path) + " " + VideoControls.FormatTime(t, info.Duration).Replace(":", ".") + ".png";
+                if (dlg.ShowDialog(FindForm()) == DialogResult.OK)
+                {
+                    Cursor = Cursors.WaitCursor;
+                    try
+                    {
+                        var size = new Size(Math.Max(2, info.Width), Math.Max(2, info.Height));
+                        using (var bmp = FrameGrabber.Grab(info.Path, t, size, "", null, info) ?? FrameGrabber.Grab(info.Path, Math.Max(0, t - 0.25), size, "", null, info))
+                        {
+                            if (bmp == null) throw new System.IO.IOException("that frame couldn't be read");
+                            ImageSaver.Save(bmp, dlg.FileName);
+                        }
+                    }
+                    catch (Exception ex) { MessageBox.Show(FindForm(), "Couldn't save the frame:\n" + ex.Message, "Stills & Reels", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                    finally { Cursor = Cursors.Default; }
+                }
+            }
+            if (was) Player.Play();
+        }
+
         public readonly VideoSurface Surface = new VideoSurface();
         public readonly VideoPlayer Player;
         public readonly VideoControls Controls2;
@@ -427,6 +482,7 @@ namespace StillsAndReels
                 return lastOut;
             };
             Controls2 = new VideoControls(Player);
+            Controls2.SnapshotRequested += (s, e) => SaveFrame();
             Surface.Dock = DockStyle.Fill;
             Controls.Add(Surface);
             Controls.Add(Controls2);
