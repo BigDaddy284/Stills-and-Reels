@@ -708,7 +708,7 @@ namespace StillsAndReels
         }
 
         /// <summary>Called from the playback thread with a frame that is only valid during the call.</summary>
-        public void PresentCopy(Bitmap src)
+        public void PresentCopy(Frame src)
         {
             lock (frameLock)
             {
@@ -717,11 +717,7 @@ namespace StillsAndReels
                     if (frame != null) frame.Dispose();
                     frame = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
                 }
-                using (var g = Graphics.FromImage(frame))
-                {
-                    g.CompositingMode = CompositingMode.SourceCopy;
-                    g.DrawImageUnscaled(src, 0, 0);
-                }
+                src.CopyTo(frame);
             }
             if (System.Threading.Interlocked.Exchange(ref pendingPaint, 1) == 0 && IsHandleCreated && !IsDisposed)
             {

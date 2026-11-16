@@ -20,6 +20,7 @@ namespace StillsAndReels
         public double Fps;
         public string VideoCodec, AudioCodec;
         public bool ColourTagged;          // the video says which colour standard it uses (e.g. bt709)
+        public bool HasAlpha;              // the video carries transparency (e.g. ProRes 4444, WebM with alpha)
         public long FileSize;
 
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -50,6 +51,7 @@ namespace StillsAndReels
                     info.HasVideo = true;
                     var cm = Regex.Match(line, @"Video:\s*([A-Za-z0-9_]+)");
                     if (cm.Success) info.VideoCodec = cm.Groups[1].Value;
+                    info.HasAlpha = Regex.IsMatch(line, @"\b(yuva\w*|rgba\w*|bgra\w*|argb\w*|abgr\w*|gbrap\w*|ya8|ya16\w*|pal8)\b");
                     info.ColourTagged = Regex.IsMatch(line, @"\b(bt709|bt470bg|smpte170m|smpte240m|bt2020nc|bt2020c|fcc|ycgco)\b");
                     var sm = Regex.Match(line, @"[ ,](\d{2,5})x(\d{2,5})[ ,\]]");
                     if (sm.Success)

@@ -1758,11 +1758,10 @@ namespace StillsAndReels
         Bitmap RenderFull(double t)
         {
             var comp = new Compositor(project.Clone(), id => Library.Find(id)) { HighQuality = true };
-            var bmp = new Bitmap(project.Width, project.Height, PixelFormat.Format32bppArgb);
-            using (var frames = new StillFrames())
-            using (var g = Graphics.FromImage(bmp)) comp.Render(g, bmp.Width, bmp.Height, Math.Min(t, Math.Max(0, project.Duration - project.FrameDuration)), frames);
+            var canvas = new Frame(project.Width, project.Height);
+            using (var frames = new StillFrames()) comp.Render(canvas, Math.Min(t, Math.Max(0, project.Duration - project.FrameDuration)), frames);
             comp.ReleaseWork();
-            return bmp;
+            return canvas.ToBitmap();
         }
 
         public void ImportCaptions()

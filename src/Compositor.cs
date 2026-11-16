@@ -143,203 +143,234 @@ namespace StillsAndReels
             return m;
         }
 
+        // ------------------------------------------------------------------ effects on raw BGRA (rows run across all cores)
+
         /// <summary>Applies a colour matrix in place (32bpp ARGB bitmap data).</summary>
-        public static void ApplyMatrix(BitmapData d, double[] m)
+        public static void ApplyMatrix(BitmapData d, double[] m) { ApplyMatrix(d.Scan0, d.Scan0, d.Width, d.Height, d.Stride, d.Stride, m); }
+
+        /// <summary>Applies a colour matrix, reading from one buffer and writing to another (or the same one).</summary>
+        public static void ApplyMatrix(IntPtr src, IntPtr dst, int w, int h, int srcStride, int dstStride, double[] m)
         {
             // fixed point: coefficients × 1024, offsets in 0..255 × 1024
             int r0 = (int)(m[0] * 1024), r1 = (int)(m[1] * 1024), r2 = (int)(m[2] * 1024), r3 = (int)(m[3] * 255 * 1024);
             int g0 = (int)(m[4] * 1024), g1 = (int)(m[5] * 1024), g2 = (int)(m[6] * 1024), g3 = (int)(m[7] * 255 * 1024);
             int b0 = (int)(m[8] * 1024), b1 = (int)(m[9] * 1024), b2 = (int)(m[10] * 1024), b3 = (int)(m[11] * 255 * 1024);
-            int w = d.Width, h = d.Height;
-            for (int y = 0; y < h; y++)
+            Raster.Rows(0, h, (long)w * h * 2, (ya, yb) =>
             {
-                byte* p = (byte*)d.Scan0 + y * d.Stride;
-                for (int x = 0; x < w; x++, p += 4)
+                for (int y = ya; y < yb; y++)
                 {
-                    int b = p[0], g = p[1], r = p[2];
-                    int nr = (r0 * r + r1 * g + r2 * b + r3) >> 10;
-                    int ng = (g0 * r + g1 * g + g2 * b + g3) >> 10;
-                    int nb = (b0 * r + b1 * g + b2 * b + b3) >> 10;
-                    p[2] = (byte)(nr < 0 ? 0 : nr > 255 ? 255 : nr);
-                    p[1] = (byte)(ng < 0 ? 0 : ng > 255 ? 255 : ng);
-                    p[0] = (byte)(nb < 0 ? 0 : nb > 255 ? 255 : nb);
+                    byte* s = (byte*)src + (long)y * srcStride;
+                    byte* p = (byte*)dst + (long)y * dstStride;
+                    for (int x = 0; x < w; x++, p += 4, s += 4)
+                    {
+                        int b = s[0], g = s[1], r = s[2];
+                        int nr = (r0 * r + r1 * g + r2 * b + r3) >> 10;
+                        int ng = (g0 * r + g1 * g + g2 * b + g3) >> 10;
+                        int nb = (b0 * r + b1 * g + b2 * b + b3) >> 10;
+                        p[2] = (byte)(nr < 0 ? 0 : nr > 255 ? 255 : nr);
+                        p[1] = (byte)(ng < 0 ? 0 : ng > 255 ? 255 : ng);
+                        p[0] = (byte)(nb < 0 ? 0 : nb > 255 ? 255 : nb);
+                        p[3] = s[3];
+                    }
                 }
-            }
+            });
         }
 
         /// <summary>Makes pixels close to the key colour transparent (YCbCr distance) and removes colour spill.</summary>
-        public static void ChromaKey(BitmapData d, Color key, double similarity, double smoothness)
+        public static void ChromaKey(IntPtr scan0, int w, int h, int stride, Color key, double similarity, double smoothness)
         {
-            double kcb = -0.168736 * key.R - 0.331264 * key.G + 0.5 * key.B;
-            double kcr = 0.5 * key.R - 0.418688 * key.G - 0.081312 * key.B;
+            // CbCr in fixed point (× 1024); distances compared squared so most pixels never need a square root
+            int kcb = (-173 * key.R - 339 * key.G + 512 * key.B), kcr = (512 * key.R - 429 * key.G - 83 * key.B);
             double sim = 4 + similarity / 100.0 * 110;       // CbCr distance in 0..~180 space
             double smo = Math.Max(1, smoothness / 100.0 * 80);
+            double far = (sim + smo) * 1024, near = sim * 1024;
+            double far2 = far * far;
             bool green = key.G >= key.R && key.G >= key.B;
             bool blue = key.B > key.R && key.B > key.G;
-            int w = d.Width, h = d.Height;
-            for (int y = 0; y < h; y++)
+            Raster.Rows(0, h, (long)w * h * 2, (ya, yb) =>
             {
-                byte* p = (byte*)d.Scan0 + y * d.Stride;
-                for (int x = 0; x < w; x++, p += 4)
+                for (int y = ya; y < yb; y++)
                 {
-                    int b = p[0], g = p[1], r = p[2];
-                    double cb = -0.168736 * r - 0.331264 * g + 0.5 * b;
-                    double cr = 0.5 * r - 0.418688 * g - 0.081312 * b;
-                    double dist = Math.Sqrt((cb - kcb) * (cb - kcb) + (cr - kcr) * (cr - kcr));
-                    double a = (dist - sim) / smo;
-                    if (a >= 1) continue;
-                    if (a < 0) a = 0;
-                    p[3] = (byte)(p[3] * a);
-                    // spill suppression on the semi-transparent edge
-                    if (green) { int lim = Math.Max(r, b); if (g > lim) p[1] = (byte)lim; }
-                    else if (blue) { int lim = Math.Max(r, g); if (b > lim) p[0] = (byte)lim; }
+                    byte* p = (byte*)scan0 + (long)y * stride;
+                    for (int x = 0; x < w; x++, p += 4)
+                    {
+                        int b = p[0], g = p[1], r = p[2];
+                        int cb = -173 * r - 339 * g + 512 * b - kcb, cr = 512 * r - 429 * g - 83 * b - kcr;
+                        double d2 = (double)cb * cb + (double)cr * cr;
+                        if (d2 >= far2) continue;
+                        double a = (Math.Sqrt(d2) - near) / (far - near);
+                        if (a >= 1) continue;
+                        if (a < 0) a = 0;
+                        p[3] = (byte)(p[3] * a);
+                        // spill suppression on the semi-transparent edge
+                        if (green) { int lim = Math.Max(r, b); if (g > lim) p[1] = (byte)lim; }
+                        else if (blue) { int lim = Math.Max(r, g); if (b > lim) p[0] = (byte)lim; }
+                    }
                 }
-            }
-        }
-
-        public static void MultiplyAlpha(BitmapData d, double k)
-        {
-            int f = (int)(Math.Max(0, Math.Min(1, k)) * 256);
-            int w = d.Width, h = d.Height;
-            for (int y = 0; y < h; y++)
-            {
-                byte* p = (byte*)d.Scan0 + y * d.Stride + 3;
-                for (int x = 0; x < w; x++, p += 4) *p = (byte)((*p * f) >> 8);
-            }
+            });
         }
 
         /// <summary>Box blur, run three times (close to a Gaussian), all four channels.</summary>
-        public static void Blur(BitmapData d, int radius)
+        public static void Blur(IntPtr scan0, int w, int h, int stride, int radius)
         {
             if (radius < 1) return;
-            int w = d.Width, h = d.Height;
-            var tmp = new int[Math.Max(w, h) * 4];
             for (int pass = 0; pass < 3; pass++)
             {
-                for (int y = 0; y < h; y++) BoxLine((byte*)d.Scan0 + y * d.Stride, 4, w, radius, tmp);
-                for (int x = 0; x < w; x++) BoxLine((byte*)d.Scan0 + x * 4, d.Stride, h, radius, tmp);
+                Raster.Rows(0, h, (long)w * h * 4, (ya, yb) =>
+                {
+                    var tmp = new int[w * 4];
+                    for (int y = ya; y < yb; y++) BoxLine((byte*)scan0 + (long)y * stride, 4, w, radius, tmp);
+                });
+                Raster.Rows(0, w, (long)w * h * 4, (xa, xb) =>
+                {
+                    var tmp = new int[h * 4];
+                    for (int x = xa; x < xb; x++) BoxLine((byte*)scan0 + x * 4, stride, h, radius, tmp);
+                });
             }
         }
 
         static void BoxLine(byte* start, int step, int n, int r, int[] tmp)
         {
             int win = r * 2 + 1;
+            // 1/win as a fixed-point multiply: a divide per pixel is the slow part of a box blur
+            int recip = (int)((1L << 24) / win);
             for (int c = 0; c < 4; c++)
             {
                 int sum = 0;
-                for (int i = -r; i <= r; i++) sum += start[Clamp(i, n) * step + c];
+                for (int i = -r; i <= r; i++) sum += start[(long)Clamp(i, n) * step + c];
                 for (int i = 0; i < n; i++)
                 {
-                    tmp[i * 4 + c] = sum / win;
-                    sum += start[Clamp(i + r + 1, n) * step + c] - start[Clamp(i - r, n) * step + c];
+                    tmp[i * 4 + c] = (int)(((long)sum * recip + (1 << 23)) >> 24);
+                    sum += start[(long)Clamp(i + r + 1, n) * step + c] - start[(long)Clamp(i - r, n) * step + c];
                 }
             }
             for (int i = 0; i < n; i++)
             {
-                byte* p = start + i * step;
+                byte* p = start + (long)i * step;
                 p[0] = (byte)tmp[i * 4]; p[1] = (byte)tmp[i * 4 + 1]; p[2] = (byte)tmp[i * 4 + 2]; p[3] = (byte)tmp[i * 4 + 3];
             }
         }
 
         static int Clamp(int i, int n) { return i < 0 ? 0 : i >= n ? n - 1 : i; }
 
-        public static void Sharpen(BitmapData d, double amount)
+        public static void Sharpen(IntPtr scan0, int w, int h, int stride, double amount)
         {
-            int w = d.Width, h = d.Height;
             int k = (int)(amount / 100.0 * 2.0 * 256);
             if (k <= 0 || w < 3 || h < 3) return;
-            var copy = new byte[d.Stride * h];
-            Marshal.Copy(d.Scan0, copy, 0, copy.Length);
-            int s = d.Stride;
-            fixed (byte* src = copy)
+            var copy = new byte[stride * h];
+            Marshal.Copy(scan0, copy, 0, copy.Length);
+            int s = stride;
+            Raster.Rows(1, h - 1, (long)w * h * 2, (ya, yb) =>
             {
-                for (int y = 1; y < h - 1; y++)
+                fixed (byte* src = copy)
                 {
-                    byte* o = (byte*)d.Scan0 + y * s + 4;
-                    byte* c = src + y * s + 4;
-                    for (int x = 1; x < w - 1; x++, o += 4, c += 4)
+                    for (int y = ya; y < yb; y++)
                     {
-                        for (int ch = 0; ch < 3; ch++)
+                        byte* o = (byte*)scan0 + (long)y * s + 4;
+                        byte* c = src + (long)y * s + 4;
+                        for (int x = 1; x < w - 1; x++, o += 4, c += 4)
                         {
-                            int center = c[ch];
-                            int avg = (c[ch - 4] + c[ch + 4] + c[ch - s] + c[ch + s]) >> 2;
-                            int v = center + (((center - avg) * k) >> 8);
-                            o[ch] = (byte)(v < 0 ? 0 : v > 255 ? 255 : v);
+                            for (int ch = 0; ch < 3; ch++)
+                            {
+                                int center = c[ch];
+                                int avg = (c[ch - 4] + c[ch + 4] + c[ch - s] + c[ch + s]) >> 2;
+                                int v = center + (((center - avg) * k) >> 8);
+                                o[ch] = (byte)(v < 0 ? 0 : v > 255 ? 255 : v);
+                            }
                         }
                     }
                 }
-            }
+            });
         }
 
-        public static void Vignette(BitmapData d, double amount)
+        public static void Vignette(IntPtr scan0, int w, int h, int stride, double amount)
         {
-            int w = d.Width, h = d.Height;
             double cx = w / 2.0, cy = h / 2.0;
             double strength = amount / 100.0 * 0.85;
-            double inv = 1.0 / Math.Sqrt(cx * cx + cy * cy);
-            var row = new int[w];
-            for (int y = 0; y < h; y++)
+            // darkening by squared distance from the centre (0 centre .. 1 corner), looked up instead of computed per pixel
+            const int N = 1024;
+            var lut = new int[N + 1];
+            for (int i = 0; i <= N; i++)
             {
-                double dy = (y - cy);
-                for (int x = 0; x < w; x++)
-                {
-                    double dx = x - cx;
-                    double r = Math.Sqrt(dx * dx + dy * dy) * inv; // 0 centre .. 1 corner
-                    double f = 1 - strength * Math.Pow(Math.Max(0, (r - 0.35) / 0.65), 1.6);
-                    row[x] = (int)(Math.Max(0, f) * 256);
-                }
-                byte* p = (byte*)d.Scan0 + y * d.Stride;
-                for (int x = 0; x < w; x++, p += 4)
-                {
-                    int f = row[x];
-                    p[0] = (byte)((p[0] * f) >> 8); p[1] = (byte)((p[1] * f) >> 8); p[2] = (byte)((p[2] * f) >> 8);
-                }
+                double r = Math.Sqrt(i / (double)N);
+                double f = 1 - strength * Math.Pow(Math.Max(0, (r - 0.35) / 0.65), 1.6);
+                lut[i] = (int)(Math.Max(0, f) * 256);
             }
+            double inv2 = N / (cx * cx + cy * cy);
+            Raster.Rows(0, h, (long)w * h, (ya, yb) =>
+            {
+                fixed (int* l = lut)
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        double dy = y + 0.5 - cy, dy2 = dy * dy;
+                        byte* p = (byte*)scan0 + (long)y * stride;
+                        for (int x = 0; x < w; x++, p += 4)
+                        {
+                            double dx = x + 0.5 - cx;
+                            int i = (int)((dx * dx + dy2) * inv2);
+                            int f = l[i > N ? N : i];
+                            if (f >= 256) continue;
+                            p[0] = (byte)((p[0] * f) >> 8); p[1] = (byte)((p[1] * f) >> 8); p[2] = (byte)((p[2] * f) >> 8);
+                        }
+                    }
+                }
+            });
         }
 
-        public static void Grain(BitmapData d, double amount, int seed)
+        public static void Grain(IntPtr scan0, int w, int h, int stride, double amount, int seed)
         {
-            int w = d.Width, h = d.Height;
             int amp = (int)(amount / 100.0 * 48);
             if (amp <= 0) return;
-            uint s = (uint)(seed * 2654435761u + 12345u) | 1u;
-            for (int y = 0; y < h; y++)
+            Raster.Rows(0, h, (long)w * h, (ya, yb) =>
             {
-                byte* p = (byte*)d.Scan0 + y * d.Stride;
-                for (int x = 0; x < w; x++, p += 4)
+                for (int y = ya; y < yb; y++)
                 {
+                    // each row has its own sequence, so rows can be done in any order and still give the same picture
+                    uint s = (uint)(seed * 2654435761u + (uint)y * 40503u + 12345u) | 1u;
                     s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-                    int n = (int)(s & 0xFF) - 128;
-                    int v = (n * amp) >> 7;
-                    int b = p[0] + v, g = p[1] + v, r = p[2] + v;
-                    p[0] = (byte)(b < 0 ? 0 : b > 255 ? 255 : b);
-                    p[1] = (byte)(g < 0 ? 0 : g > 255 ? 255 : g);
-                    p[2] = (byte)(r < 0 ? 0 : r > 255 ? 255 : r);
+                    byte* p = (byte*)scan0 + (long)y * stride;
+                    for (int x = 0; x < w; x++, p += 4)
+                    {
+                        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+                        int n = (int)(s & 0xFF) - 128;
+                        int v = (n * amp) >> 7;
+                        int b = p[0] + v, g = p[1] + v, r = p[2] + v;
+                        p[0] = (byte)(b < 0 ? 0 : b > 255 ? 255 : b);
+                        p[1] = (byte)(g < 0 ? 0 : g > 255 ? 255 : g);
+                        p[2] = (byte)(r < 0 ? 0 : r > 255 ? 255 : r);
+                    }
                 }
-            }
+            });
         }
 
-        /// <summary>True when the clip needs a per-pixel pass.</summary>
-        public static bool NeedsPass(Clip c, double opacity)
+        /// <summary>True when the clip needs a per-pixel pass before it is drawn.</summary>
+        public static bool NeedsPass(Clip c)
         {
-            return c.HasColorWork || c.ChromaKey || c.Blur > 0.5 || c.Sharpen > 0.5 || c.Vignette > 0.5 || c.Grain > 0.5 || opacity < 0.999;
+            return c.HasColorWork || c.ChromaKey || c.Blur > 0.5 || c.Sharpen > 0.5 || c.Vignette > 0.5 || c.Grain > 0.5;
         }
 
-        /// <summary>Runs all of the clip's pixel effects on bitmap b (in place).</summary>
-        public static void ApplyEffects(Bitmap b, Clip c, double opacity, int frameIndex)
+        /// <summary>
+        /// Runs all of the clip's pixel effects, reading src (opaque or straight alpha) and writing dst (same size).
+        /// dst comes out ready to draw: opaque, or premultiplied when the effects made parts of it transparent.
+        /// </summary>
+        public static void ApplyEffects(Frame src, Frame dst, Clip c, int frameIndex)
         {
-            var d = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-            try
+            int w = src.Width, h = src.Height, stride = w * 4;
+            fixed (byte* s = src.Data) fixed (byte* d = dst.Data)
             {
-                if (c.HasColorWork) ApplyMatrix(d, ClipMatrix(c));
-                if (c.ChromaKey) ChromaKey(d, Color.FromArgb(c.KeyColor), c.KeySimilarity, c.KeySmoothness);
-                if (c.Blur > 0.5) Blur(d, Math.Max(1, (int)Math.Round(c.Blur / 100.0 * Math.Max(b.Width, b.Height) / 45.0)));
-                if (c.Sharpen > 0.5) Sharpen(d, c.Sharpen);
-                if (c.Vignette > 0.5) Vignette(d, c.Vignette);
-                if (c.Grain > 0.5) Grain(d, c.Grain, frameIndex);
-                if (opacity < 0.999) MultiplyAlpha(d, opacity);
+                IntPtr sp = (IntPtr)s, dp = (IntPtr)d;
+                if (c.HasColorWork) ApplyMatrix(sp, dp, w, h, stride, stride, ClipMatrix(c));
+                else Buffer.MemoryCopy(s, d, dst.Data.Length, (long)stride * h);
+                dst.Opaque = src.Opaque;
+                dst.Premultiplied = src.Opaque;
+                if (c.ChromaKey) { ChromaKey(dp, w, h, stride, Color.FromArgb(c.KeyColor), c.KeySimilarity, c.KeySmoothness); dst.Opaque = false; dst.Premultiplied = false; }
+                if (c.Blur > 0.5) Blur(dp, w, h, stride, Math.Max(1, (int)Math.Round(c.Blur / 100.0 * Math.Max(w, h) / 45.0)));
+                if (c.Sharpen > 0.5) Sharpen(dp, w, h, stride, c.Sharpen);
+                if (c.Vignette > 0.5) Vignette(dp, w, h, stride, c.Vignette);
+                if (c.Grain > 0.5) Grain(dp, w, h, stride, c.Grain, frameIndex);
             }
-            finally { b.UnlockBits(d); }
+            if (!dst.Opaque) Raster.Premultiply(dst);
         }
     }
 
@@ -348,8 +379,11 @@ namespace StillsAndReels
     /// <summary>Supplies source pictures for clips. Implemented for paused preview (single grabs) and playback/export (streams).</summary>
     internal interface IFrameSource : IDisposable
     {
-        /// <summary>The clip's source picture at timeline time t, decoded at the given size. Owned by the source.</summary>
-        Bitmap Get(Clip c, MediaItem m, double t, Size size);
+        /// <summary>
+        /// The clip's source picture at timeline time t, decoded at the given size. Owned by the source, and only
+        /// valid until the next Get for the same clip. Opaque, or straight (not premultiplied) alpha.
+        /// </summary>
+        Frame Get(Clip c, MediaItem m, double t, Size size);
         void BeginFrame();
         void EndFrame();
         void Prepare(Clip c, MediaItem m, double t, Size size);
@@ -373,7 +407,12 @@ namespace StillsAndReels
         }
 
         /// <summary>Picture of an image clip: cropped, flipped and scaled (cached by the caller).</summary>
-        public static Bitmap ImageFrame(MediaItem m, Clip c, Size size)
+        public static Frame ImageFrame(MediaItem m, Clip c, Size size)
+        {
+            using (var b = ImageBitmap(m, c, size)) return b == null ? null : Frame.FromBitmap(b, false);
+        }
+
+        static Bitmap ImageBitmap(MediaItem m, Clip c, Size size)
         {
             Bitmap pic;
             lock (m.Sync) pic = m.Picture;
@@ -415,7 +454,7 @@ namespace StillsAndReels
     /// </summary>
     internal sealed class StillFrames : IFrameSource
     {
-        readonly Dictionary<string, Bitmap> cache = new Dictionary<string, Bitmap>();
+        readonly Dictionary<string, Frame> cache = new Dictionary<string, Frame>();
         readonly LinkedList<string> lru = new LinkedList<string>();
         const int MaxEntries = 400;
         const long MaxBytes = 320L * 1024 * 1024;
@@ -437,7 +476,7 @@ namespace StillsAndReels
         static string KeyRunId(Clip c, MediaItem m, Size size, string pre) { return m.Id + "|" + size.Width + "x" + size.Height + "|" + pre + "|" + m.SourcePath; }
 
         /// <summary>The cached keyframe at or before src, if a fetched run covers src; otherwise null.</summary>
-        Bitmap KeyframeFor(Clip c, MediaItem m, double src, Size size, string pre, int gen)
+        Frame KeyframeFor(Clip c, MediaItem m, double src, Size size, string pre, int gen)
         {
             KeyRuns kr;
             if (!keyRuns.TryGetValue(KeyRunId(c, m, size, pre), out kr)) return null;
@@ -450,7 +489,7 @@ namespace StillsAndReels
             while (lo <= hi) { int mid = (lo + hi) / 2; if (keys[mid] <= src + 1e-6) { best = mid; lo = mid + 1; } else hi = mid - 1; }
             if (best < 0) return null;
             string k = kr.Keys.Values[best];
-            Bitmap b;
+            Frame b;
             if (!cache.TryGetValue(k, out b)) { kr.Keys.RemoveAt(best); return null; } // evicted meanwhile: fetch again
             Touch(k);
             return b;
@@ -462,10 +501,10 @@ namespace StillsAndReels
             string id = KeyRunId(c, m, size, pre);
             KeyRuns kr;
             if (!keyRuns.TryGetValue(id, out kr)) keyRuns[id] = kr = new KeyRuns();
-            var got = new List<KeyValuePair<double, Bitmap>>();
+            var got = new List<KeyValuePair<double, Frame>>();
             try
             {
-                FrameGrabber.GrabKeyframes(m.SourcePath, from, size, pre, 16, (pt, b) => got.Add(new KeyValuePair<double, Bitmap>(pt, b)),
+                FrameGrabber.GrabKeyframes(m.SourcePath, from, size, pre, 16, (pt, b) => got.Add(new KeyValuePair<double, Frame>(pt, b)),
                     () => gen != cancelGen, p => { lock (procLock) current = p; }, m.Info);
             }
             catch { }
@@ -475,8 +514,7 @@ namespace StillsAndReels
             foreach (var kv in got)
             {
                 string k = "key|" + id + "|" + Math.Round(kv.Key * 1000);
-                Bitmap have;
-                if (cache.TryGetValue(k, out have)) { kv.Value.Dispose(); Touch(k); }
+                if (cache.ContainsKey(k)) Touch(k);
                 else Put(k, kv.Value);
                 kr.Keys[kv.Key] = k;
             }
@@ -500,12 +538,12 @@ namespace StillsAndReels
             return m.Id + "|" + Math.Round(src * 1000) + "|" + size.Width + "x" + size.Height + "|" + (sharp ? "s|" : "f|") + SourceFilters.Pre(c, false) + "|" + m.SourcePath;
         }
 
-        public Bitmap Get(Clip c, MediaItem m, double t, Size size)
+        public Frame Get(Clip c, MediaItem m, double t, Size size)
         {
             if (m.Kind == MediaKind.Image)
             {
                 string ik = "img" + m.Id + "|" + size.Width + "x" + size.Height + "|" + c.CropL + c.CropT + c.CropR + c.CropB + c.FlipH + c.FlipV;
-                Bitmap hit;
+                Frame hit;
                 if (cache.TryGetValue(ik, out hit)) { Touch(ik); return hit; }
                 var b = SourceFilters.ImageFrame(m, c, size);
                 if (b != null) Put(ik, b);
@@ -523,11 +561,11 @@ namespace StillsAndReels
             lastSrc[m.Id] = src;
             bool sharp = !Live;
             string key = Key(c, m, src, size, sharp);
-            Bitmap cached;
+            Frame cached;
             if (cache.TryGetValue(key, out cached)) { Touch(key); return cached; }
             // while scrubbing, a sharp frame of the same moment does as well
             int gen = cancelGen;
-            Bitmap frame = null;
+            Frame frame = null;
             string pre = SourceFilters.Pre(c, false);
             long frameBytes = (long)size.Width * size.Height * 4;
             int run = (int)Math.Max(1, Math.Min(Math.Round(1 / fd), RunBytes / Math.Max(1, frameBytes)));
@@ -545,7 +583,7 @@ namespace StillsAndReels
                 // cached under their own keys so they are never mistaken for exact frames.
                 if (havePrev && Math.Abs(src - prev) > run * fd * 0.5)
                 {
-                    Bitmap kf = KeyframeFor(c, m, src, size, pre, gen);
+                    Frame kf = KeyframeFor(c, m, src, size, pre, gen);
                     if (kf != null || gen != cancelGen || IsCancelled()) return kf;
                     bool backwards = src < prev;
                     FetchKeyframes(c, m, backwards ? Math.Max(0, src - 10) : src, size, pre, gen);
@@ -564,24 +602,24 @@ namespace StillsAndReels
                 if (gen != cancelGen || IsCancelled()) return null;
                 try
                 {
-                    var got = new List<KeyValuePair<double, Bitmap>>();
+                    var got = new List<KeyValuePair<double, Frame>>();
                     FrameGrabber.GrabRun(m.SourcePath, Math.Max(0, tt), size, pre, run, 1 / fd, sharp,
-                        (st, b) => got.Add(new KeyValuePair<double, Bitmap>(st, b)),
+                        (st, b) => got.Add(new KeyValuePair<double, Frame>(st, b)),
                         () => gen != cancelGen,
                         p => { lock (procLock) current = p; }, m.Info);
                     foreach (var kv in got)
                     {
                         double ft = Math.Floor(kv.Key / fd + 0.5) * fd;
                         string k = Key(c, m, ft, size, sharp);
-                        Bitmap have;
-                        if (cache.TryGetValue(k, out have)) { kv.Value.Dispose(); Touch(k); if (k == key) frame = have; continue; }
+                        Frame have;
+                        if (cache.TryGetValue(k, out have)) { Touch(k); if (k == key) frame = have; continue; }
                         Put(k, kv.Value);
                         if (k == key) frame = kv.Value;
                     }
                     if (frame == null && got.Count > 0 && tt < src)
                     {
                         // the file ends before src: its last frame stands in
-                        frame = new Bitmap(got[got.Count - 1].Value);
+                        frame = got[got.Count - 1].Value;
                         Put(key, frame);
                     }
                 }
@@ -595,19 +633,19 @@ namespace StillsAndReels
 
         void Touch(string k) { lru.Remove(k); lru.AddFirst(k); }
 
-        void Put(string k, Bitmap b)
+        void Put(string k, Frame b)
         {
-            Bitmap old;
-            if (cache.TryGetValue(k, out old)) { bytes -= (long)old.Width * old.Height * 4; old.Dispose(); lru.Remove(k); }
+            Frame old;
+            if (cache.TryGetValue(k, out old)) { bytes -= old.Bytes; lru.Remove(k); }
             cache[k] = b;
-            bytes += (long)b.Width * b.Height * 4;
+            bytes += b.Bytes;
             lru.AddFirst(k);
             while (lru.Count > 1 && (lru.Count > MaxEntries || bytes > MaxBytes))
             {
                 var last = lru.Last.Value;
                 lru.RemoveLast();
-                Bitmap ob;
-                if (cache.TryGetValue(last, out ob)) { cache.Remove(last); bytes -= (long)ob.Width * ob.Height * 4; ob.Dispose(); }
+                Frame ob;
+                if (cache.TryGetValue(last, out ob)) { cache.Remove(last); bytes -= ob.Bytes; }
             }
         }
 
@@ -618,7 +656,6 @@ namespace StillsAndReels
         public void Dispose()
         {
             Cancel();
-            foreach (var b in cache.Values) b.Dispose();
             cache.Clear();
             lru.Clear();
             keyRuns.Clear();
@@ -642,8 +679,8 @@ namespace StillsAndReels
         bool eof, disposed;
         byte[] currentBuf;
         int currentIndex = -1;
-        int shownIndex = -2;
-        public readonly Bitmap Bitmap;
+        Frame current;
+        readonly bool opaque;
         public int LastUsed;
 
         public ClipStream(string key, Clip c, MediaItem m, double t0, double fps, Size size, bool sharp)
@@ -663,7 +700,7 @@ namespace StillsAndReels
             string args = FFmpeg.InputArgs(m.SourcePath, src) + "-map 0:v:0 -an -sn -dn -vf \"" + vf + "\" -f rawvideo -pix_fmt bgra pipe:1";
             proc = FFmpeg.Start(args);
             proc.BeginErrorReadLine();
-            Bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            opaque = m.Info == null || !m.Info.HasAlpha;
             new Thread(Reader) { IsBackground = true, Name = "clip decoder" }.Start();
         }
 
@@ -706,7 +743,7 @@ namespace StillsAndReels
         /// The frame for timeline time t. Waits up to waitMs for it (−1 = until it arrives or the stream ends).
         /// Returns null if nothing has been decoded yet.
         /// </summary>
-        public Bitmap GetFrame(double t, int waitMs)
+        public Frame GetFrame(double t, int waitMs)
         {
             int k = IndexFor(t);
             var sw = Stopwatch.StartNew();
@@ -720,6 +757,7 @@ namespace StillsAndReels
                         if (currentBuf != null) pool.Push(currentBuf);
                         currentBuf = item.Value;
                         currentIndex = item.Key;
+                        current = null;
                         Monitor.PulseAll(sync);
                         continue;
                     }
@@ -730,13 +768,10 @@ namespace StillsAndReels
                     Monitor.Wait(sync, Math.Min(left, 1000));
                 }
                 if (currentBuf == null) return null;
-                if (shownIndex != currentIndex)
-                {
-                    Pixels.CopyInto(currentBuf, Bitmap);
-                    shownIndex = currentIndex;
-                }
+                // the decoder's own buffer, with no copy: it stays untouched until a later frame is asked for
+                if (current == null) current = new Frame(width, height, currentBuf) { Opaque = opaque, Premultiplied = opaque };
+                return current;
             }
-            return Bitmap;
         }
 
         public bool Ended { get { lock (sync) return eof && queue.Count == 0; } }
@@ -746,7 +781,6 @@ namespace StillsAndReels
         {
             lock (sync) { disposed = true; Monitor.PulseAll(sync); }
             FFmpeg.KillQuietly(proc);
-            Bitmap.Dispose();
         }
     }
 
@@ -756,7 +790,7 @@ namespace StillsAndReels
         readonly double fps;
         readonly bool export;
         readonly Dictionary<int, ClipStream> streams = new Dictionary<int, ClipStream>();
-        readonly Dictionary<string, Bitmap> images = new Dictionary<string, Bitmap>();
+        readonly Dictionary<string, Frame> images = new Dictionary<string, Frame>();
         readonly HashSet<string> usedImages = new HashSet<string>();
         int frame;
 
@@ -787,13 +821,13 @@ namespace StillsAndReels
             return s;
         }
 
-        public Bitmap Get(Clip c, MediaItem m, double t, Size size)
+        public Frame Get(Clip c, MediaItem m, double t, Size size)
         {
             if (m.Kind == MediaKind.Image)
             {
                 string ik = m.Id + "|" + size.Width + "x" + size.Height + "|" + c.CropL + c.CropT + c.CropR + c.CropB + c.FlipH + c.FlipV;
                 usedImages.Add(ik);
-                Bitmap b;
+                Frame b;
                 if (!images.TryGetValue(ik, out b))
                 {
                     b = SourceFilters.ImageFrame(m, c, size);
@@ -825,7 +859,7 @@ namespace StillsAndReels
             {
                 var gone = new List<string>();
                 foreach (var k in images.Keys) if (!usedImages.Contains(k)) gone.Add(k);
-                foreach (var k in gone) { images[k].Dispose(); images.Remove(k); }
+                foreach (var k in gone) images.Remove(k);
             }
         }
 
@@ -833,7 +867,6 @@ namespace StillsAndReels
         {
             foreach (var s in streams.Values) s.Dispose();
             streams.Clear();
-            foreach (var b in images.Values) b.Dispose();
             images.Clear();
         }
     }
@@ -977,6 +1010,148 @@ namespace StillsAndReels
         }
     }
 
+    /// <summary>
+    /// Text clips as pictures. Drawing text means building font outlines, which is far slower than copying
+    /// pixels, so each text is drawn once and kept until its words or style change. A text that stands still
+    /// is drawn exactly where it sits (as crisp as drawing it directly); a text that moves, turns or grows is
+    /// drawn once at its largest size and then placed like any other picture.
+    /// </summary>
+    internal static class TextRaster
+    {
+        sealed class Entry { public Frame Frame; public int X, Y; public RectangleF Local; public float K; }
+
+        static readonly object gate = new object();
+        static readonly Dictionary<string, Entry> cache = new Dictionary<string, Entry>();
+        static readonly LinkedList<string> lru = new LinkedList<string>();
+        static long bytes;
+        const long MaxBytes = 96L * 1024 * 1024;
+
+        static string StyleKey(Clip c, float canvasH)
+        {
+            var inv = CultureInfo.InvariantCulture;
+            return string.Join("\u0001", new[]
+            {
+                c.Text ?? "", c.Font ?? "", c.FontSize.ToString("R", inv), c.TextColor.ToString(inv), c.Bold ? "b" : "", c.Italic ? "i" : "",
+                c.Align.ToString(inv), c.OutlineColor.ToString(inv), c.OutlineWidth.ToString("R", inv), c.Shadow ? "s" : "",
+                c.BoxColor.ToString(inv), c.BoxOpacity.ToString("R", inv), c.TextStyle ?? "", canvasH.ToString("R", inv),
+            });
+        }
+
+        static Entry Find(string key)
+        {
+            lock (gate)
+            {
+                Entry e;
+                if (!cache.TryGetValue(key, out e)) return null;
+                lru.Remove(key); lru.AddFirst(key);
+                return e;
+            }
+        }
+
+        static void Keep(string key, Entry e)
+        {
+            lock (gate)
+            {
+                Entry old;
+                if (cache.TryGetValue(key, out old)) { bytes -= old.Frame.Bytes; lru.Remove(key); }
+                cache[key] = e;
+                bytes += e.Frame.Bytes;
+                lru.AddFirst(key);
+                while (lru.Count > 1 && bytes > MaxBytes)
+                {
+                    string last = lru.Last.Value;
+                    lru.RemoveLast();
+                    if (cache.TryGetValue(last, out old)) { cache.Remove(last); bytes -= old.Frame.Bytes; }
+                }
+            }
+        }
+
+        /// <summary>The space the text's drawing can reach around its box: outline, glow, shadow and background box.</summary>
+        static RectangleF Reach(RectangleF box, float em) { return RectangleF.Inflate(box, em * 0.8f, em * 0.5f); }
+
+        /// <summary>
+        /// Draws a text clip. m places text space (centred on 0,0, in canvas pixels) on the canvas. moving = the
+        /// placement changes from frame to frame; maxScale = the largest scale the text reaches while it does.
+        /// </summary>
+        public static void Draw(Frame canvas, Clip c, Matrix m, double opacity, bool moving, double maxScale, Layer like)
+        {
+            float canvasH = canvas.Height;
+            var e = m.Elements;
+            string style = StyleKey(c, canvasH);
+            Entry entry;
+            if (!moving)
+            {
+                string key = "s\u0001" + style + "\u0001" + canvas.Width + "\u0001" + string.Join(",", Array.ConvertAll(e, v => Math.Round(v, 3).ToString("R", CultureInfo.InvariantCulture)));
+                entry = Find(key);
+                if (entry == null)
+                {
+                    float em; RectangleF box;
+                    using (TextLayout.Build(c, canvasH, out box, out em)) { }
+                    var r = Reach(box, em);
+                    var pts = new[] { new PointF(r.Left, r.Top), new PointF(r.Right, r.Top), new PointF(r.Right, r.Bottom), new PointF(r.Left, r.Bottom) };
+                    m.TransformPoints(pts);
+                    float l = Math.Min(Math.Min(pts[0].X, pts[1].X), Math.Min(pts[2].X, pts[3].X)), t = Math.Min(Math.Min(pts[0].Y, pts[1].Y), Math.Min(pts[2].Y, pts[3].Y));
+                    float rr = Math.Max(Math.Max(pts[0].X, pts[1].X), Math.Max(pts[2].X, pts[3].X)), b = Math.Max(Math.Max(pts[0].Y, pts[1].Y), Math.Max(pts[2].Y, pts[3].Y));
+                    int x0 = Math.Max(0, (int)Math.Floor(l) - 1), y0 = Math.Max(0, (int)Math.Floor(t) - 1);
+                    int x1 = Math.Min(canvas.Width, (int)Math.Ceiling(rr) + 1), y1 = Math.Min(canvas.Height, (int)Math.Ceiling(b) + 1);
+                    if (x1 <= x0 || y1 <= y0) return;
+                    using (var bmp = new Bitmap(x1 - x0, y1 - y0, PixelFormat.Format32bppPArgb))
+                    {
+                        using (var g = Graphics.FromImage(bmp))
+                        {
+                            g.Clear(Color.Transparent);
+                            g.TranslateTransform(-x0, -y0);
+                            TextLayout.Draw(g, c, canvasH, m, 1);
+                        }
+                        entry = new Entry { Frame = Frame.FromBitmap(bmp, true), X = x0, Y = y0 };
+                    }
+                    Keep(key, entry);
+                }
+                Raster.Draw(canvas, new Layer
+                {
+                    Src = entry.Frame, Tx = entry.X, Ty = entry.Y, Opacity = opacity,
+                    Mode = like.Mode, HasClip = like.HasClip, Clip = like.Clip, Alpha = like.Alpha,
+                });
+                return;
+            }
+
+            float k = (float)Math.Max(0.25, Math.Min(4, maxScale));
+            string dk = "m\u0001" + style + "\u0001" + k.ToString("R", CultureInfo.InvariantCulture);
+            entry = Find(dk);
+            if (entry == null)
+            {
+                float em; RectangleF box;
+                using (TextLayout.Build(c, canvasH, out box, out em)) { }
+                var r = Reach(box, em);
+                // keep very large text within a sensible picture size
+                float limit = 4096f / Math.Max(1f, Math.Max(r.Width, r.Height));
+                if (k > limit) k = Math.Max(0.1f, limit);
+                using (var bmp = new Bitmap(Math.Max(2, (int)Math.Ceiling(r.Width * k) + 2), Math.Max(2, (int)Math.Ceiling(r.Height * k) + 2), PixelFormat.Format32bppPArgb))
+                {
+                    using (var g = Graphics.FromImage(bmp))
+                    using (var local = new Matrix())
+                    {
+                        g.Clear(Color.Transparent);
+                        local.Scale(k, k);
+                        local.Translate(-r.Left, -r.Top);
+                        TextLayout.Draw(g, c, canvasH, local, 1);
+                    }
+                    entry = new Entry { Frame = Frame.FromBitmap(bmp, true), Local = r, K = k };
+                }
+                Keep(dk, entry);
+            }
+            // picture pixel (u, v) is text-space point (u / K + Local.Left, v / K + Local.Top), which m places on the canvas
+            double kk = entry.K, lx = entry.Local.Left, ly = entry.Local.Top;
+            Raster.Draw(canvas, new Layer
+            {
+                Src = entry.Frame,
+                A = e[0] / kk, B = e[1] / kk, C = e[2] / kk, D = e[3] / kk,
+                Tx = e[0] * lx + e[2] * ly + e[4], Ty = e[1] * lx + e[3] * ly + e[5],
+                Opacity = opacity, Mode = like.Mode, HasClip = like.HasClip, Clip = like.Clip, Alpha = like.Alpha, Sharp = like.Sharp,
+            });
+        }
+    }
+
     // =========================================================================== compositor
 
     /// <summary>Draws the project at one moment. Used for the preview, playback and export, so they always match.</summary>
@@ -985,7 +1160,8 @@ namespace StillsAndReels
         readonly Project project;
         readonly Func<int, MediaItem> media;
         public bool HighQuality;
-        readonly Dictionary<int, Bitmap> work = new Dictionary<int, Bitmap>();
+        readonly Dictionary<int, Frame> work = new Dictionary<int, Frame>();
+        bool cleared;
 
         public Compositor(Project project, Func<int, MediaItem> media)
         {
@@ -1103,12 +1279,12 @@ namespace StillsAndReels
             }
         }
 
-        public void Render(Graphics g, float cw, float ch, double t, IFrameSource src)
+        /// <summary>Draws the whole picture at time t onto canvas, whose size sets the scale (it need not be the project's).</summary>
+        public void Render(Frame canvas, double t, IFrameSource src)
         {
-            g.Clear(Color.FromArgb(project.Background));
-            g.InterpolationMode = HighQuality ? InterpolationMode.HighQualityBicubic : InterpolationMode.Bilinear;
-            g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.CompositingQuality = HighQuality ? CompositingQuality.HighQuality : CompositingQuality.HighSpeed;
+            float cw = canvas.Width, ch = canvas.Height;
+            cleared = false;
+            canvas.Opaque = canvas.Premultiplied = true;
             src.BeginFrame();
             try
             {
@@ -1119,11 +1295,12 @@ namespace StillsAndReels
                     Active(tr, t, out a, out b, out p, out tx);
                     if (b == null)
                     {
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1, PointF.Empty, 1f);
+                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
                         continue;
                     }
-                    DrawTransition(g, a, b, t, p, tx, cw, ch, src);
+                    DrawTransition(canvas, a, b, t, p, tx, src);
                 }
+                EnsureCleared(canvas);
                 foreach (var kv in Upcoming(t, 1.0))
                 {
                     var m = media(kv.Key.MediaId);
@@ -1133,8 +1310,26 @@ namespace StillsAndReels
             finally { src.EndFrame(); }
         }
 
-        void DrawTransition(Graphics g, Clip a, Clip b, double t, double p, string kind, float cw, float ch, IFrameSource src)
+        /// <summary>The background is only painted when something needs it: a clip that fills the canvas covers every pixel anyway.</summary>
+        void EnsureCleared(Frame canvas)
         {
+            if (cleared) return;
+            Raster.Clear(canvas, Color.FromArgb(project.Background));
+            cleared = true;
+        }
+
+        static void Tint(Frame canvas, Color col, double k)
+        {
+            if (k <= 0.002) return;
+            var one = new Frame(1, 1);
+            one.Data[0] = col.B; one.Data[1] = col.G; one.Data[2] = col.R; one.Data[3] = 255;
+            one.Opaque = one.Premultiplied = true;
+            Raster.Draw(canvas, new Layer { Src = one, A = canvas.Width, D = canvas.Height, Opacity = Math.Min(1, k) });
+        }
+
+        void DrawTransition(Frame canvas, Clip a, Clip b, double t, double p, string kind, IFrameSource src)
+        {
+            float cw = canvas.Width, ch = canvas.Height;
             p = Math.Max(0, Math.Min(1, p));
             double e = p * p * (3 - 2 * p);
             switch (kind)
@@ -1146,16 +1341,17 @@ namespace StillsAndReels
                         double k;
                         if (a != null)
                         {
-                            if (p < 0.5) DrawClip(g, a, t, cw, ch, src, 1, PointF.Empty, 1f);
-                            else DrawClip(g, b, t, cw, ch, src, 1, PointF.Empty, 1f);
+                            if (p < 0.5) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                            else DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, null);
                             k = p < 0.5 ? p * 2 : (1 - p) * 2;
                         }
                         else
                         {
-                            DrawClip(g, b, t, cw, ch, src, 1, PointF.Empty, 1f);
+                            DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, null);
                             k = 1 - p;
                         }
-                        using (var br = new SolidBrush(Color.FromArgb((int)(255 * Math.Max(0, Math.Min(1, k))), col))) g.FillRectangle(br, 0, 0, cw, ch);
+                        EnsureCleared(canvas);
+                        Tint(canvas, col, k);
                         break;
                     }
                 case "wipeleft":
@@ -1163,16 +1359,13 @@ namespace StillsAndReels
                 case "wipeup":
                 case "wipedown":
                     {
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1, PointF.Empty, 1f);
-                        RectangleF r;
-                        if (kind == "wipeleft") r = new RectangleF((float)(cw * (1 - e)), 0, (float)(cw * e) + 1, ch);
-                        else if (kind == "wiperight") r = new RectangleF(0, 0, (float)(cw * e), ch);
-                        else if (kind == "wipeup") r = new RectangleF(0, (float)(ch * (1 - e)), cw, (float)(ch * e) + 1);
-                        else r = new RectangleF(0, 0, cw, (float)(ch * e));
-                        var st = g.Save();
-                        g.SetClip(r);
-                        DrawClip(g, b, t, cw, ch, src, 1, PointF.Empty, 1f);
-                        g.Restore(st);
+                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                        Rectangle r;
+                        if (kind == "wipeleft") r = Rectangle.FromLTRB((int)Math.Round(cw * (1 - e)), 0, (int)cw, (int)ch);
+                        else if (kind == "wiperight") r = Rectangle.FromLTRB(0, 0, (int)Math.Round(cw * e), (int)ch);
+                        else if (kind == "wipeup") r = Rectangle.FromLTRB(0, (int)Math.Round(ch * (1 - e)), (int)cw, (int)ch);
+                        else r = Rectangle.FromLTRB(0, 0, (int)cw, (int)Math.Round(ch * e));
+                        DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, new Layer { HasClip = true, Clip = r });
                         break;
                     }
                 case "slideleft":
@@ -1185,105 +1378,137 @@ namespace StillsAndReels
                         else if (kind == "slideright") dx = cw;
                         else if (kind == "slideup") dy = -ch;
                         else dy = ch;
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1, new PointF((float)(dx * e), (float)(dy * e)), 1f);
-                        DrawClip(g, b, t, cw, ch, src, a == null ? e : 1, new PointF((float)(-dx * (1 - e)), (float)(-dy * (1 - e))), 1f);
+                        if (a != null) DrawClip(canvas, a, t, src, 1, new PointF((float)(dx * e), (float)(dy * e)), 1f, null);
+                        DrawClip(canvas, b, t, src, a == null ? e : 1, new PointF((float)(-dx * (1 - e)), (float)(-dy * (1 - e))), 1f, null);
                         break;
                     }
                 case "circle":
                     {
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1, PointF.Empty, 1f);
-                        float rad = (float)(Math.Sqrt(cw * cw + ch * ch) / 2 * e);
-                        using (var path = new GraphicsPath())
-                        {
-                            path.AddEllipse(cw / 2 - rad, ch / 2 - rad, rad * 2, rad * 2);
-                            var st = g.Save();
-                            g.SetClip(path);
-                            DrawClip(g, b, t, cw, ch, src, 1, PointF.Empty, 1f);
-                            g.Restore(st);
-                        }
+                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                        double rad = Math.Sqrt(cw * cw + ch * ch) / 2 * e, mx = cw / 2.0, my = ch / 2.0;
+                        DrawClip(canvas, b, t, src, 1, PointF.Empty, 1f, new Layer { Alpha = Shapes.Circle(mx, my, rad) });
                         break;
                     }
                 case "zoom":
                     {
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1 - e * 0.6, PointF.Empty, (float)(1 + 0.35 * e));
-                        DrawClip(g, b, t, cw, ch, src, e, PointF.Empty, (float)(0.75 + 0.25 * e));
+                        if (a != null) DrawClip(canvas, a, t, src, 1 - e * 0.6, PointF.Empty, (float)(1 + 0.35 * e), null);
+                        DrawClip(canvas, b, t, src, e, PointF.Empty, (float)(0.75 + 0.25 * e), null);
                         break;
                     }
                 default: // dissolve
                     {
-                        if (a != null) DrawClip(g, a, t, cw, ch, src, 1, PointF.Empty, 1f);
-                        DrawClip(g, b, t, cw, ch, src, e, PointF.Empty, 1f);
+                        if (a != null) DrawClip(canvas, a, t, src, 1, PointF.Empty, 1f, null);
+                        DrawClip(canvas, b, t, src, e, PointF.Empty, 1f, null);
                         break;
                     }
             }
         }
 
-        public void DrawClip(Graphics g, Clip c, double t, float cw, float ch, IFrameSource src, double extraOpacity, PointF offset, float extraScale)
+        /// <summary>
+        /// Draws one clip. extraOpacity, offset and extraScale come from a transition; 'like' carries a transition's
+        /// clip rectangle or shape (only its HasClip, Clip and Alpha are read).
+        /// </summary>
+        public void DrawClip(Frame canvas, Clip c, double t, IFrameSource src, double extraOpacity, PointF offset, float extraScale, Layer like)
         {
             if (!c.IsVisual) return;
+            float cw = canvas.Width, ch = canvas.Height;
             var p = c.PlacementAt(t);
             double opacity = Math.Max(0, Math.Min(1, p.Opacity)) * c.FadeAt(t) * extraOpacity;
             if (opacity <= 0.002) return;
+            var layer = new Layer { Opacity = opacity, Sharp = HighQuality, Mode = Looks.BlendMode(c.Blend) };
+            if (like != null) { layer.HasClip = like.HasClip; layer.Clip = like.Clip; layer.Alpha = like.Alpha; }
             using (var m = PlacementMatrix(p, cw, ch, offset, extraScale))
             {
                 if (c.Kind == ClipKind.Text)
                 {
-                    TextLayout.Draw(g, c, ch, m, opacity);
+                    EnsureCleared(canvas);
+                    bool moving = c.HasKeys || extraScale != 1f || offset != PointF.Empty;
+                    TextRaster.Draw(canvas, c, m, opacity, moving, c.MaxScale * Math.Max(1f, extraScale), layer);
                     return;
                 }
                 var mi = media(c.MediaId);
                 if (mi == null || !mi.IsUsable) return;
                 var size = DecodeSize(c, mi, cw, ch);
-                Bitmap pic;
+                Frame pic;
                 try { pic = src.Get(c, mi, t, size); }
                 catch { pic = null; }
                 if (pic == null) return;
-                Bitmap draw = pic;
-                if (Pixels.NeedsPass(c, opacity))
+                if (Pixels.NeedsPass(c))
                 {
-                    Bitmap wb;
+                    Frame wb;
                     if (!work.TryGetValue(c.Id, out wb) || wb.Width != pic.Width || wb.Height != pic.Height)
                     {
-                        if (wb != null) wb.Dispose();
-                        wb = new Bitmap(pic.Width, pic.Height, PixelFormat.Format32bppArgb);
+                        wb = new Frame(pic.Width, pic.Height);
                         work[c.Id] = wb;
                     }
-                    Pixels.CopyBitmap(pic, wb);
-                    Pixels.ApplyEffects(wb, c, opacity, (int)(t * project.Fps));
-                    draw = wb;
+                    Pixels.ApplyEffects(pic, wb, c, (int)(t * project.Fps));
+                    pic = wb;
                 }
+                else pic = pic.AsPremultiplied();
                 var bs = BaseSize(c, mi, cw, ch);
-                var st = g.Save();
-                g.MultiplyTransform(m);
-                // a frame that lands pixel for pixel on the canvas is copied exactly instead of resampled
-                if (IsPixelExact(g.Transform, bs, draw)) g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                g.TranslateTransform(-bs.Width / 2, -bs.Height / 2);
-                g.ScaleTransform(bs.Width / draw.Width, bs.Height / draw.Height);
-                // mirrored edges stop the resampler from blending the picture's border with transparency
-                edgeAttrs.SetWrapMode(WrapMode.TileFlipXY);
-                g.DrawImage(draw, new Rectangle(0, 0, draw.Width, draw.Height), 0, 0, draw.Width, draw.Height, GraphicsUnit.Pixel, edgeAttrs);
-                g.Restore(st);
+                // picture pixel (u, v) -> the clip's box centred on (0,0) -> rotated, scaled and moved by m
+                var e = m.Elements;
+                double kx = bs.Width / pic.Width, ky = bs.Height / pic.Height;
+                layer.Src = pic;
+                layer.A = e[0] * kx; layer.B = e[1] * kx; layer.C = e[2] * ky; layer.D = e[3] * ky;
+                layer.Tx = e[4] - (e[0] * bs.Width + e[2] * bs.Height) / 2.0;
+                layer.Ty = e[5] - (e[1] * bs.Width + e[3] * bs.Height) / 2.0;
+                Snap(layer);
+                if (!cleared)
+                {
+                    if (Covers(layer, canvas)) cleared = true;
+                    else EnsureCleared(canvas);
+                }
+                Raster.Draw(canvas, layer);
             }
         }
 
-        readonly ImageAttributes edgeAttrs = new ImageAttributes();
-
-        static bool IsPixelExact(Matrix t, SizeF bs, Bitmap pic)
+        /// <summary>
+        /// A picture that lands within a hundredth of a pixel of the pixel grid at its own size is put exactly on it,
+        /// so it is copied pixel for pixel instead of resampled (float rounding would otherwise blur a full-frame clip).
+        /// </summary>
+        static void Snap(Layer l)
         {
-            if (Math.Abs(bs.Width - pic.Width) > 0.01f || Math.Abs(bs.Height - pic.Height) > 0.01f) return false;
-            using (t)
+            if (Math.Abs(l.B) > 1e-6 || Math.Abs(l.C) > 1e-6) return;
+            if (Math.Abs(l.A * l.Src.Width - l.Src.Width) > 0.01 || Math.Abs(l.D * l.Src.Height - l.Src.Height) > 0.01) return;
+            if (Math.Abs(l.Tx - Math.Round(l.Tx)) > 0.01 || Math.Abs(l.Ty - Math.Round(l.Ty)) > 0.01) return;
+            l.A = 1; l.D = 1; l.B = 0; l.C = 0; l.Tx = Math.Round(l.Tx); l.Ty = Math.Round(l.Ty);
+        }
+
+        static bool Covers(Layer l, Frame canvas)
+        {
+            return l.Src.Opaque && l.Opacity >= 0.999 && l.Mode == Blend.Normal && l.Alpha == null && l.Mask == null && !l.HasClip &&
+                   l.A == 1 && l.D == 1 && l.B == 0 && l.C == 0 && l.Tx <= 0 && l.Ty <= 0 &&
+                   l.Tx + l.Src.Width >= canvas.Width && l.Ty + l.Src.Height >= canvas.Height;
+        }
+
+        /// <summary>Kept for callers that held per-compositor working pictures; they are plain memory now.</summary>
+        public void ReleaseWork() { work.Clear(); }
+    }
+
+    /// <summary>Shapes used by transitions, as per-row alpha for the renderer.</summary>
+    internal static unsafe class Shapes
+    {
+        /// <summary>A filled circle with a soft one-pixel edge.</summary>
+        public static RowAlpha Circle(double cx, double cy, double radius)
+        {
+            return (y, x, n, a) =>
             {
-                var e = t.Elements;
-                if (Math.Abs(e[0] - 1) > 1e-4f || Math.Abs(e[3] - 1) > 1e-4f || Math.Abs(e[1]) > 1e-4f || Math.Abs(e[2]) > 1e-4f) return false;
-                float x = e[4] - bs.Width / 2, y = e[5] - bs.Height / 2;
-                return Math.Abs(x - Math.Round(x)) < 0.01 && Math.Abs(y - Math.Round(y)) < 0.01;
-            }
-        }
-
-        public void ReleaseWork()
-        {
-            foreach (var b in work.Values) b.Dispose();
-            work.Clear();
+                double dy = y + 0.5 - cy, dy2 = dy * dy;
+                double inner = radius - 1, outer = radius + 1;
+                for (int i = 0; i < n; i++)
+                {
+                    double dx = x + i + 0.5 - cx;
+                    double d2 = dx * dx + dy2;
+                    if (inner > 0 && d2 <= inner * inner) a[i] = 255;
+                    else if (d2 >= outer * outer) a[i] = 0;
+                    else
+                    {
+                        double v = radius - Math.Sqrt(d2) + 0.5;
+                        a[i] = (byte)(v <= 0 ? 0 : v >= 1 ? 255 : (int)(v * 255 + 0.5));
+                    }
+                }
+            };
         }
     }
 }

@@ -175,7 +175,7 @@ namespace StillsAndReels
         volatile bool audioClock;
         double lastPosition;
 
-        public event Action<Bitmap> FrameReady;   // worker thread; the bitmap is only valid during the call
+        public event Action<Frame> FrameReady;    // worker thread; the frame is only valid during the call
         public event Action Finished;              // worker thread
         public event Action<string> Problem;       // worker thread
 
@@ -221,13 +221,12 @@ namespace StillsAndReels
             try
             {
                 using (var frames = new StreamFrames(fps, false))
-                using (var bmp = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb))
-                using (var g = Graphics.FromImage(bmp))
                 {
+                    var bmp = new Frame(size.Width, size.Height);
                     long lastK = -1;
                     // first frame before the clock starts, so the start isn't skipped while decoders spin up
                     long k0 = (long)Math.Floor(start * fps + 1e-6);
-                    comp.Render(g, size.Width, size.Height, Math.Max(start, k0 / fps), frames);
+                    comp.Render(bmp, Math.Max(start, k0 / fps), frames);
                     if (cancelled) return;
                     Present(bmp);
                     lastK = k0;
@@ -246,7 +245,7 @@ namespace StillsAndReels
                         long k = (long)Math.Floor(t * fps + 1e-6);
                         if (k == lastK) { Thread.Sleep(2); continue; }
                         lastK = k;
-                        comp.Render(g, size.Width, size.Height, k / fps, frames);
+                        comp.Render(bmp, k / fps, frames);
                         if (cancelled) return;
                         Present(bmp);
                     }
@@ -265,7 +264,7 @@ namespace StillsAndReels
             }
         }
 
-        void Present(Bitmap b)
+        void Present(Frame b)
         {
             var h = FrameReady;
             if (h != null) h(b);
@@ -388,9 +387,10 @@ namespace StillsAndReels
                 try
                 {
                     var comp = new Compositor(r.P, id => { MediaItem m; return r.Media.TryGetValue(id, out m) ? m : null; }) { HighQuality = !r.Live };
-                    bmp = new Bitmap(Math.Max(2, r.Size.Width), Math.Max(2, r.Size.Height), PixelFormat.Format32bppPArgb);
-                    using (var g = Graphics.FromImage(bmp)) comp.Render(g, bmp.Width, bmp.Height, r.T, frames);
+                    var canvas = new Frame(Math.Max(2, r.Size.Width), Math.Max(2, r.Size.Height));
+                    comp.Render(canvas, r.T, frames);
                     comp.ReleaseWork();
+                    if (latest == gen) bmp = canvas.ToBitmap();
                 }
                 catch
                 {
@@ -555,17 +555,14 @@ namespace StillsAndReels
             try
             {
                 using (var frames = new StreamFrames(fps, true))
-                using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb))
-                using (var g = Graphics.FromImage(bmp))
                 {
                     for (long i = 0; i < total; i++)
                     {
                         if (cancelled) throw new OperationCanceledException();
                         double t = i / fps;
-                        comp.Render(g, w, h, t, frames);
-                        g.Flush();
+                        // the picture is composed straight into the buffer that goes to the encoder
                         var buf = writer.TakeFree();
-                        CopyOut(bmp, buf);
+                        comp.Render(new Frame(w, h, buf), t, frames);
                         writer.Send(buf);
                         if (i % 5 == 0 || i == total - 1)
                         {
@@ -667,16 +664,5 @@ namespace StillsAndReels
             }
         }
 
-        static void CopyOut(Bitmap b, byte[] dest)
-        {
-            int w = b.Width, h = b.Height;
-            var d = b.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
-            try
-            {
-                if (d.Stride == w * 4) Marshal.Copy(d.Scan0, dest, 0, w * h * 4);
-                else for (int y = 0; y < h; y++) Marshal.Copy(d.Scan0 + y * d.Stride, dest, y * w * 4, w * 4);
-            }
-            finally { b.UnlockBits(d); }
-        }
     }
 }

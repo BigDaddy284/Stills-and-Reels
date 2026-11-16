@@ -626,9 +626,10 @@ namespace StillsAndReels
         /// the receiver owns them. Stops early when stop() says so. Returns how many frames were delivered.
         /// </summary>
         public static int GrabRun(string path, double t, Size size, string preFilters, int count, double fps, bool sharp,
-            Action<double, Bitmap> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
+            Action<double, Frame> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
         {
             t = Math.Max(0, t);
+            bool opaque = info == null || !info.HasAlpha;
             string args = FFmpeg.InputArgs(path, t) +
                 string.Format(CultureInfo.InvariantCulture,
                     "-map 0:v:0 -an -sn -dn -frames:v {0} -vf \"{1}fps={2:0.###}:round=down,{3}\" -f rawvideo -pix_fmt bgra pipe:1",
@@ -639,10 +640,11 @@ namespace StillsAndReels
             {
                 if (started != null) started(p);
                 p.BeginErrorReadLine();
-                var buf = new byte[size.Width * size.Height * 4];
                 var s = p.StandardOutput.BaseStream;
                 while (n < count)
                 {
+                    // each frame keeps its own buffer: the receiver caches it as it is
+                    var buf = new byte[size.Width * size.Height * 4];
                     int off = 0;
                     while (off < buf.Length)
                     {
@@ -650,7 +652,7 @@ namespace StillsAndReels
                         if (r <= 0) return n;
                         off += r;
                     }
-                    gotFrame(t + n / fps, Pixels.FromBgra(buf, size.Width, size.Height));
+                    gotFrame(t + n / fps, new Frame(size.Width, size.Height, buf) { Opaque = opaque, Premultiplied = opaque });
                     n++;
                     if (stop != null && stop()) return n;
                 }
@@ -667,9 +669,10 @@ namespace StillsAndReels
         /// with its time in the file (from FFmpeg's showinfo); the receiver owns the bitmaps.
         /// </summary>
         public static int GrabKeyframes(string path, double t, Size size, string preFilters, int count,
-            Action<double, Bitmap> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
+            Action<double, Frame> gotFrame, Func<bool> stop, Action<Process> started = null, MediaInfo info = null)
         {
             t = Math.Max(0, t);
+            bool opaque = info == null || !info.HasAlpha;
             var inv = CultureInfo.InvariantCulture;
             // -copyts keeps the file's own timestamps in showinfo; -fps_mode passthrough stops FFmpeg duplicating
             // frames to fill the gaps between keyframes
@@ -681,7 +684,7 @@ namespace StillsAndReels
             var times = new Dictionary<int, double>();
             var rx = new System.Text.RegularExpressions.Regex(@"\bn:\s*(\d+)\b.*?\bpts_time:\s*(-?[0-9.]+)");
             Process p = FFmpeg.Start(args);
-            var frames = new List<Bitmap>();
+            var frames = new List<Frame>();
             try
             {
                 if (started != null) started(p);
@@ -695,10 +698,10 @@ namespace StillsAndReels
                         lock (times) times[n] = pt;
                 };
                 p.BeginErrorReadLine();
-                var buf = new byte[size.Width * size.Height * 4];
                 var str = p.StandardOutput.BaseStream;
                 while (frames.Count < count)
                 {
+                    var buf = new byte[size.Width * size.Height * 4];
                     int off = 0;
                     while (off < buf.Length)
                     {
@@ -707,7 +710,7 @@ namespace StillsAndReels
                         off += r;
                     }
                     if (off < buf.Length) break;
-                    frames.Add(Pixels.FromBgra(buf, size.Width, size.Height));
+                    frames.Add(new Frame(size.Width, size.Height, buf) { Opaque = opaque, Premultiplied = opaque });
                     if (stop != null && stop()) break;
                 }
                 // the showinfo lines for the last frames may still be on their way; the process ends by itself
@@ -720,7 +723,7 @@ namespace StillsAndReels
                     double pt;
                     bool have;
                     lock (times) have = times.TryGetValue(i, out pt);
-                    if (!have) { frames[i].Dispose(); continue; }
+                    if (!have) continue;
                     gotFrame(pt, frames[i]);
                     delivered++;
                 }
@@ -730,7 +733,6 @@ namespace StillsAndReels
             finally
             {
                 FFmpeg.KillQuietly(p);
-                foreach (var b in frames) b.Dispose();
             }
         }
 

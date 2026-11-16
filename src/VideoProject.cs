@@ -57,6 +57,9 @@ namespace StillsAndReels
         [DataMember] public double FadeIn, FadeOut;           // picture fades (seconds)
         [DataMember] public string Transition = "";            // transition into this clip
         [DataMember] public double TransitionDuration = 0.6;
+        // New in 3.0. A project saved by 2.6 has none of these, and a missing value reads as 0, false or null,
+        // so every one of them must mean "as before" when it is empty.
+        [DataMember] public string Blend = "";                 // how the clip mixes with what is under it ("" = normal)
 
         // ---- sound
         [DataMember] public double Volume = 1;
@@ -96,6 +99,7 @@ namespace StillsAndReels
             if (Keys == null) Keys = new List<Keyframe>();
             if (Filter == null) Filter = "";
             if (Transition == null) Transition = "";
+            if (Blend == null) Blend = "";
             if (Text == null) Text = "";
             if (string.IsNullOrEmpty(Font)) Font = "Segoe UI";
             if (string.IsNullOrEmpty(TextStyle)) TextStyle = "plain";
@@ -388,6 +392,42 @@ namespace StillsAndReels
                 case "dramatic": return "Dramatic";
                 case "invert": return "Invert";
                 default: return "None";
+            }
+        }
+
+        public static readonly string[] BlendIds = { "screen", "multiply", "overlay", "softlight", "hardlight", "add", "darken", "lighten", "difference" };
+
+        public static string BlendName(string id)
+        {
+            switch (id)
+            {
+                case "screen": return "Screen";
+                case "multiply": return "Multiply";
+                case "overlay": return "Overlay";
+                case "softlight": return "Soft light";
+                case "hardlight": return "Hard light";
+                case "add": return "Add";
+                case "darken": return "Darken";
+                case "lighten": return "Lighten";
+                case "difference": return "Difference";
+                default: return "Normal";
+            }
+        }
+
+        public static Blend BlendMode(string id)
+        {
+            switch (id)
+            {
+                case "screen": return StillsAndReels.Blend.Screen;
+                case "multiply": return StillsAndReels.Blend.Multiply;
+                case "overlay": return StillsAndReels.Blend.Overlay;
+                case "softlight": return StillsAndReels.Blend.SoftLight;
+                case "hardlight": return StillsAndReels.Blend.HardLight;
+                case "add": return StillsAndReels.Blend.Add;
+                case "darken": return StillsAndReels.Blend.Darken;
+                case "lighten": return StillsAndReels.Blend.Lighten;
+                case "difference": return StillsAndReels.Blend.Difference;
+                default: return StillsAndReels.Blend.Normal;
             }
         }
 

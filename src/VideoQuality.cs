@@ -25,7 +25,11 @@ namespace StillsAndReels
         public static string ToBgra(int w, int h, bool sharp, MediaInfo info)
         {
             var sb = new StringBuilder();
-            sb.AppendFormat(Inv, "scale={0}:{1}:flags={2}", w, h, sharp ? SharpScale : FastScale);
+            // A video decoded at its own size isn't resized at all, only converted to RGB. The sharp scaling flags
+            // would still send every frame through the slow resizing path (3.5 times the decoding time, measured)
+            // and round-trip slightly worse than the plain conversion, so they are kept for real size changes.
+            bool sameSize = info != null && info.Width == w && info.Height == h;
+            sb.AppendFormat(Inv, "scale={0}:{1}:flags={2}", w, h, sharp && !sameSize ? SharpScale : FastScale);
             if (info != null && !info.ColourTagged && (info.Width >= 1280 || info.Height >= 720))
                 sb.Append(":in_color_matrix=bt709");
             sb.Append(",format=bgra");

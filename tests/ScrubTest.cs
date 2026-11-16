@@ -53,15 +53,15 @@ class T {
     var size = new Size(640, 360);
     var get = frames.GetType().GetMethod("Get");
     var sw = Stopwatch.StartNew();
-    var first = (Bitmap)get.Invoke(frames, new object[]{clip, mi, 0.5, size});
+    object first = get.Invoke(frames, new object[]{clip, mi, 0.5, size});
     double tFirst = sw.Elapsed.TotalMilliseconds;
     Check(first != null, "first frame while dragging arrives (" + (int)tFirst + " ms)");
     int got = 0; double worst = 0, total = 0;
-    Bitmap prev = first;
+    object prev = first;
     int changed = 0;
     for (int i = 1; i <= 45; i++) {
       sw.Restart();
-      var b = (Bitmap)get.Invoke(frames, new object[]{clip, mi, 0.5 + i / fps, size});
+      var b = get.Invoke(frames, new object[]{clip, mi, 0.5 + i / fps, size});
       double ms = sw.Elapsed.TotalMilliseconds;
       if (b != null) { got++; if (!ReferenceEquals(b, prev)) changed++; prev = b; }
       total += ms; if (ms > worst) worst = ms;
@@ -82,11 +82,11 @@ class T {
     // the sharp frame after the drag
     Set(frames,"Live",false);
     sw.Restart();
-    var sharp = (Bitmap)get.Invoke(frames, new object[]{clip, mi, 1.0, new Size(1280, 720)});
-    Check(sharp != null && sharp.Width == 1280, "sharp frame at full size after the drag (" + (int)sw.Elapsed.TotalMilliseconds + " ms)");
+    var sharp = get.Invoke(frames, new object[]{clip, mi, 1.0, new Size(1280, 720)});
+    Check(sharp != null && (int)Get(sharp,"Width") == 1280, "sharp frame at full size after the drag (" + (int)sw.Elapsed.TotalMilliseconds + " ms)");
     // past the end of the file still gives a picture
     double dur = (double)Get(info,"Duration");
-    var last = (Bitmap)get.Invoke(frames, new object[]{clip, mi, dur + 0.5, size});
+    var last = get.Invoke(frames, new object[]{clip, mi, dur + 0.5, size});
     Check(last != null, "a time past the end of the file still shows the last frame");
     Call(frames,"Dispose");
   }
@@ -113,10 +113,10 @@ class T {
     get.Invoke(live, new object[]{clip, mi, dur * 0.8, size});
     get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 1.3, size});
     sw.Restart();
-    int got = 0, distinct = 0; Bitmap prev = null; double worst = 0;
+    int got = 0, distinct = 0; object prev = null; double worst = 0;
     for (int i = 2; i < 42; i++) {
       var s1 = Stopwatch.StartNew();
-      var b = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + i * 1.3, size});
+      var b = get.Invoke(live, new object[]{clip, mi, dur * 0.8 + i * 1.3, size});
       double ms = s1.Elapsed.TotalMilliseconds; if (ms > worst) worst = ms;
       if (b != null) { got++; if (!ReferenceEquals(b, prev)) distinct++; prev = b; }
     }
@@ -132,14 +132,14 @@ class T {
     Check(sw.Elapsed.TotalMilliseconds < exactMs * 2, "cached keyframes are instant");
     // the exact frame when the drag ends never reuses a keyframe stand-in
     Set(live,"Live",false);
-    var exact = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
-    var standIn = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    var exact = get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    var standIn = get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
     Check(exact != null && ReferenceEquals(exact, standIn), "the exact frame is cached once the drag ends");
     bool differs = false;
     Set(live,"Live",true);
     // the stand-in for that moment was cached under its own key; find it by asking again with a coarse step
     get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 30 * 1.3, size});
-    var again = (Bitmap)get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
+    var again = get.Invoke(live, new object[]{clip, mi, dur * 0.8 + 10 * 1.3, size});
     differs = !ReferenceEquals(again, exact);
     Check(!differs, "once the exact frame exists, dragging over it shows the exact frame, not the keyframe");
     Call(live,"Dispose");

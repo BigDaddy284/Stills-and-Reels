@@ -40,8 +40,12 @@ PY
 
 compile() { # name [extra mcs args]
   local n="$1"; shift
-  mcs -sdk:4.8 $REFS "$@" -out:"$WORK/$n.exe" "tests/$n.cs" 2>&1 | grep -E "error" ; [ -f "$WORK/$n.exe" ]
+  rm -f "$WORK/$n.exe"
+  mcs -sdk:4.8 $REFS "$@" -out:"$WORK/$n.exe" "tests/$n.cs" 2>&1 | grep -E "error"
+  [ -f "$WORK/$n.exe" ] || { FAILED="$FAILED $n(compile)"; return 1; }
 }
+# Tests that use the app's own types are compiled together with its sources.
+WITH_SRC="-unsafe -nowarn:414,169,649 -r:System.Runtime.Serialization.dll -r:System.Xml.dll -r:Accessibility.dll src/*.cs"
 
 run() { # label command...
   local label="$1"; shift
@@ -55,7 +59,7 @@ run() { # label command...
 
 t_logic()   { compile logic && run logic mono "$WORK/logic.exe"; }
 t_pickup()  { compile pickup && run pickup mono "$WORK/pickup.exe" "$SR_EXE"; }
-t_compose() { [ -f tests/ComposeTest.cs ] || return 0; compile ComposeTest && run compose mono "$WORK/ComposeTest.exe" "$SR_EXE" "$WORK"; }
+t_compose() { [ -f tests/ComposeTest.cs ] || return 0; compile ComposeTest -main:ComposeTest $WITH_SRC && run compose mono "$WORK/ComposeTest.exe"; }
 t_export()  {
   compile ExportTest || return
   run export mono "$WORK/ExportTest.exe" "$SR_EXE" "$WORK/src1080.mp4" "$WORK/out.mp4" 1920 1080 30 18
@@ -70,7 +74,7 @@ t_hide()    { compile HideTest && run hide-picture mono "$WORK/HideTest.exe" pic
 t_snip()    { compile SnipWindowsTest || return; for m in windows "start pic" "start vid" keep hide timer args; do run "snip $m" mono "$WORK/SnipWindowsTest.exe" $m; done; }
 t_theme()   { compile ThemeTest && run theme mono "$WORK/ThemeTest.exe" "$SR_EXE"; }
 t_finish()  { compile FinishTest && run finish mono "$WORK/FinishTest.exe" "$SR_EXE"; }
-t_bench()   { [ -f tests/Bench.cs ] || return 0; compile Bench && mono "$WORK/Bench.exe" "$SR_EXE" "$WORK"; }
+t_bench()   { [ -f tests/Bench.cs ] || return 0; compile Bench -main:Bench $WITH_SRC && mono "$WORK/Bench.exe" "$WORK"; }
 
 fixtures
 SET="${*:-logic pickup compose export scrub}"
