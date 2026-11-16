@@ -235,7 +235,7 @@ namespace StillsAndReels
             var r = new Rectangle(at.X < 0 ? (ClientSize.Width - sz.Width) / 2 - Theme.S(14) : at.X, Math.Max(Theme.S(4), at.Y), sz.Width + Theme.S(28), sz.Height + Theme.S(12));
             using (var path = Theme.Rounded(r, r.Height / 2f))
             {
-                using (var b = new SolidBrush(Color.FromArgb(225, 14, 19, 37))) g.FillPath(b, path);
+                using (var b = new SolidBrush(Color.FromArgb(225, Theme.Current.OverlayBg))) g.FillPath(b, path);
                 using (var b = new LinearGradientBrush(r, Theme.Current.AccentA, Theme.Current.AccentB, 0f))
                 using (var pen = new Pen(b, Theme.F(1.2f))) g.DrawPath(pen, path);
             }
@@ -287,7 +287,7 @@ namespace StillsAndReels
             Font = Theme.UiFont(9.5f);
             KeyPreview = true;
             MinimumSize = new Size(Theme.S(560), Theme.S(380));
-            try { Icon = host.Icon; } catch { }
+            try { if (Theme.AppIcon != null) Icon = Theme.AppIcon; } catch { }
 
             colors[EditTool.Pen] = Color.FromArgb(255, 232, 17, 35);
             colors[EditTool.Highlighter] = Color.FromArgb(255, 255, 255, 0);
@@ -757,7 +757,7 @@ namespace StillsAndReels
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
-            BackColor = Color.FromArgb(14, 19, 37);
+            BackColor = Theme.Current.OverlayBg;
             Cursor = Cursors.Hand;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
             Size = new Size(Theme.S(290), Theme.S(48));
@@ -799,7 +799,7 @@ namespace StillsAndReels
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BackColor);
             using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), Theme.F(12)))
-            using (var b = new LinearGradientBrush(ClientRectangle, Color.FromArgb(38, 104, 255), Color.FromArgb(176, 72, 255), 0f))
+            using (var b = new LinearGradientBrush(ClientRectangle, Theme.Current.OverlayA, Theme.Current.OverlayB, 0f))
             using (var pen = new Pen(b, Theme.F(1.5f))) g.DrawPath(pen, path);
             float m = Theme.F(12), sz = Height - 2 * m;
             Icons.Draw(g, Ico.Timer, new RectangleF(Theme.F(14), m, sz, sz), Color.White);

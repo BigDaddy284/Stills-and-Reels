@@ -69,7 +69,7 @@ namespace StillsAndReels
         ToolStripMenuItem miUndo, miRedo, miCopy, miPaste, miPasteNew, miEdit, miSnip, miRotL, miRotR, miFlipH, miFlipV, miCrop, miClearInk;
         ToolStripMenuItem miEditVideo, miVideoSnip, miSplit, miDelete, miSelectAll, miNewProject, miOpenProject, miSaveProject, miSaveProjectAs, miImport, miExport;
         ToolStripMenuItem miVideoEditor;
-        ToolStripMenuItem miPictures, miVideos, miZoomIn, miZoomOut, miFit, miActual, miGrid, miFollow, miTopMost, miStatusBar, miDark, miLight;
+        ToolStripMenuItem miPictures, miVideos, miZoomIn, miZoomOut, miFit, miActual, miGrid, miFollow, miTopMost, miStatusBar, miDark, miLight, miGraphite;
         ToolStripMenuItem miPlayback, miPlay, miBack, miForward, miMute, miFullscreen, miSpeed;
         ThemedButton tbPointer, tbZoom, tbCrop, tbMore, tbExport;
 
@@ -101,10 +101,10 @@ namespace StillsAndReels
             MinimumSize = new Size(Theme.S(860), Theme.S(540));
             KeyPreview = true;
             AllowDrop = true;
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            try { if (Theme.AppIcon != null) Icon = Theme.AppIcon; } catch { }
 
             // settings that affect the look must be known before building
-            Theme.Set(settings.GetString("Theme", "Dark") != "Light");
+            Theme.Set(settings.GetString("Theme", "Dark"));
 
             BuildMenu();
             topBar = new TopBar(menu);
@@ -413,9 +413,10 @@ namespace StillsAndReels
             miTopMost = Item("Always on &top", Keys.None, (s, e) => { TopMost = !TopMost; UpdateUi(); });
             miStatusBar = Item("&Status bar", Keys.None, (s, e) => { statusBar.Visible = !statusBar.Visible; UpdateUi(); });
             var themeMenu = new ToolStripMenuItem("T&heme");
-            miDark = Item("&Dark mode", Keys.None, (s, e) => SetDark(true));
-            miLight = Item("&Light mode", Keys.None, (s, e) => SetDark(false));
-            themeMenu.DropDownItems.AddRange(new ToolStripItem[] { miDark, miLight });
+            miDark = Item("&Dark mode", Keys.None, (s, e) => SetTheme("Dark"));
+            miLight = Item("&Light mode", Keys.None, (s, e) => SetTheme("Light"));
+            miGraphite = Item("&Graphite", Keys.None, (s, e) => SetTheme("Graphite"));
+            themeMenu.DropDownItems.AddRange(new ToolStripItem[] { miDark, miLight, miGraphite });
             view.DropDownItems.AddRange(new ToolStripItem[]
             {
                 miPictures, miVideos, miVideoEditor, new ToolStripSeparator(),
@@ -493,8 +494,9 @@ namespace StillsAndReels
             var m = new ContextMenuStrip();
             m.Items.Add(new ToolStripMenuItem("Settings…", null, (s, e) => ShowSettings()) { ShortcutKeyDisplayString = "Ctrl+," });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(new ToolStripMenuItem("Dark mode", null, (s, e) => SetDark(true)) { Checked = Theme.Current.Dark });
-            m.Items.Add(new ToolStripMenuItem("Light mode", null, (s, e) => SetDark(false)) { Checked = !Theme.Current.Dark });
+            m.Items.Add(new ToolStripMenuItem("Dark mode", null, (s, e) => SetTheme("Dark")) { Checked = Theme.Current.Name == "Dark" });
+            m.Items.Add(new ToolStripMenuItem("Light mode", null, (s, e) => SetTheme("Light")) { Checked = Theme.Current.Name == "Light" });
+            m.Items.Add(new ToolStripMenuItem("Graphite", null, (s, e) => SetTheme("Graphite")) { Checked = Theme.Current.Name == "Graphite" });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Follow clicks and File Explorer selection", null, (s, e) => SetFollow(!follow)) { Checked = follow });
             m.Items.Add(new ToolStripMenuItem("Always on top", null, (s, e) => { TopMost = !TopMost; UpdateUi(); }) { Checked = TopMost });
@@ -557,7 +559,7 @@ namespace StillsAndReels
             settings.Set("PickUpFiles", pickFiles);
             settings.Set("PickUpCopied", pickCopied);
             settings.Set("StatusBar", fullscreen ? prevStatusVisible : statusBar.Visible);
-            settings.Set("Theme", Theme.Current.Dark ? "Dark" : "Light");
+            settings.Set("Theme", Theme.Current.Name);
             settings.Set("PixelGrid", canvas.ShowPixelGrid);
             settings.Set("AutoplayVideos", autoplay);
             settings.Set("KeepViewedVideos", keepViewedVideos);
@@ -577,7 +579,7 @@ namespace StillsAndReels
         {
             var o = new SettingsForm.Options
             {
-                Dark = Theme.Current.Dark, Follow = follow, TopMost = TopMost, StatusBar = statusBar.Visible,
+                ThemeName = Theme.Current.Name, Follow = follow, TopMost = TopMost, StatusBar = statusBar.Visible,
                 PixelGrid = canvas.ShowPixelGrid, Autoplay = autoplay, KeepViewed = keepViewedVideos,
                 PickClicks = pickClicks, PickFiles = pickFiles, PickCopied = pickCopied
             };
@@ -586,7 +588,7 @@ namespace StillsAndReels
 
         void ApplyOptions(SettingsForm.Options o)
         {
-            SetDark(o.Dark);
+            SetTheme(o.ThemeName);
             if (o.Follow != follow) SetFollow(o.Follow);
             TopMost = o.TopMost;
             if (!fullscreen) statusBar.Visible = o.StatusBar;
@@ -599,9 +601,9 @@ namespace StillsAndReels
             UpdateUi();
         }
 
-        void SetDark(bool dark)
+        void SetTheme(string name)
         {
-            Theme.Set(dark);
+            Theme.Set(name);
             UpdateUi();
         }
 
@@ -1631,7 +1633,7 @@ namespace StillsAndReels
         void ShowAbout()
         {
             MessageBox.Show(this,
-                AppName + " 2.5\n\n" +
+                AppName + " 2.6\n\n" +
                 "Click a picture or video in any File Explorer window (or move with the arrow keys) and it appears here. " +
                 "Files clicked on the desktop or in Open/Save dialogs, pictures clicked on web pages or in other apps, and pictures or files you copy are picked up too (see Settings). " +
                 "Pictures from web pages are copied from the screen as shown; nothing is downloaded.\n\n" +
@@ -1800,8 +1802,9 @@ namespace StillsAndReels
             miFollow.Checked = follow;
             miTopMost.Checked = TopMost;
             miStatusBar.Checked = statusBar.Visible || (fullscreen && prevStatusVisible);
-            miDark.Checked = Theme.Current.Dark;
-            miLight.Checked = !Theme.Current.Dark;
+            miDark.Checked = Theme.Current.Name == "Dark";
+            miLight.Checked = Theme.Current.Name == "Light";
+            miGraphite.Checked = Theme.Current.Name == "Graphite";
         }
 
         string PictureName

@@ -1,8 +1,8 @@
 1 ICON "app.ico"
 1 24 "app.manifest"
 1 VERSIONINFO
-FILEVERSION 2,2,0,0
-PRODUCTVERSION 2,2,0,0
+FILEVERSION 2,6,0,0
+PRODUCTVERSION 2,6,0,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -10,8 +10,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "Stills & Reels"
       VALUE "ProductName", "Stills & Reels"
-      VALUE "FileVersion", "2.5.0.0"
-      VALUE "ProductVersion", "2.5.0.0"
+      VALUE "FileVersion", "2.6.0.0"
+      VALUE "ProductVersion", "2.6.0.0"
       VALUE "InternalName", "StillsAndReels"
       VALUE "OriginalFilename", "StillsAndReels.exe"
     END

@@ -678,7 +678,7 @@ namespace StillsAndReels
             var g = e.Graphics;
             var p = Theme.Current;
             BuildRows();
-            g.Clear(p.Dark ? Color.FromArgb(11, 14, 28) : Color.FromArgb(240, 243, 250));
+            g.Clear(p.TimelineBg);
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             // track backgrounds
@@ -702,7 +702,7 @@ namespace StillsAndReels
                     continue;
                 }
                 bool main = ReferenceEquals(r.Track, ed.Project.Main);
-                using (var b = new SolidBrush(main ? (p.Dark ? Color.FromArgb(18, 23, 44) : Color.FromArgb(228, 233, 246)) : (p.Dark ? Color.FromArgb(15, 19, 36) : Color.FromArgb(234, 238, 248))))
+                using (var b = new SolidBrush(main ? p.TrackMain : p.TrackOther))
                     g.FillRectangle(b, rr);
                 if (main && r.Track.Clips.Count == 0)
                     TextRenderer.DrawText(g, "Drag videos and pictures here – or double-click them in the media panel", Theme.UiFont(9.5f), rr, p.Muted,
@@ -739,7 +739,7 @@ namespace StillsAndReels
                     var br = new RectangleF(x - s / 2, r.Top + r.Height / 2f - s / 2, s, s);
                     using (var path = Theme.Rounded(br, Theme.F(5)))
                     {
-                        using (var b = new SolidBrush(p.Dark ? Color.FromArgb(235, 26, 32, 60) : Color.FromArgb(240, 255, 255, 255))) g.FillPath(b, path);
+                        using (var b = new SolidBrush(p.PopupBg)) g.FillPath(b, path);
                         using (var b = Theme.AccentGradient(br)) using (var pen = new Pen(b, Theme.F(1.3f))) g.DrawPath(pen, path);
                     }
                     Icons.Draw(g, Ico.Transition, RectangleF.Inflate(br, -Theme.F(3), -Theme.F(3)), p.Text, 1.6f);

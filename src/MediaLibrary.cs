@@ -397,7 +397,7 @@ namespace StillsAndReels
             var b = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
             using (var g = Graphics.FromImage(b))
             {
-                g.Clear(Color.FromArgb(20, 24, 40));
+                g.Clear(Theme.Current.ThumbBg);
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 double s = Math.Max((double)w / src.Width, (double)h / src.Height);

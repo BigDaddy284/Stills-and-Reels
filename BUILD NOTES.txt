@@ -1,4 +1,4 @@
-Stills & Reels 2.5 - source
+Stills & Reels 2.6 - source
 ===========================
 C# WinForms, .NET Framework 4.8. About 17,000 lines in src/. Built on Linux with Mono (mcs) and
 mingw windres; the result is a single Windows exe.
@@ -53,6 +53,11 @@ Layout
                          SoundPump and argument builder; checks stalls, dropped frames and sync. It is
                          compiled together with src/*.cs: see the comment at the top of the file. Run it
                          on Xvfb :99 with 'pc', 'pc+mic', 'none' or 'pc+slow').
+                         ThemeTest.cs (2.6: the three themes and the embedded app icon; run on Xvfb).
                          TEST PLAN.md lists every test that must pass before a build is handed over.
+
+App icon: app.ico is compiled in twice, as the exe's icon (app.rc) and as the managed
+resource StillsAndReels.app.ico that the windows load (Theme.AppIcon). It was made from
+icon/stills-and-reels-sky-classic.svg (32 px and up) and icon/small.svg (16 to 24 px).
 
 Licence of FFmpeg and credits: see READ ME.txt in the released zip.

@@ -35,6 +35,7 @@ namespace StillsAndReels
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = MinimizeBox = false;
             ShowInTaskbar = false;
+            try { if (Theme.AppIcon != null) Icon = Theme.AppIcon; } catch { }
             StartPosition = FormStartPosition.CenterParent;
             AutoScaleMode = AutoScaleMode.None;
             Font = Theme.UiFont(9.5f);
@@ -56,7 +57,7 @@ namespace StillsAndReels
             pathBox = new TextBox
             {
                 Text = Unique(Path.Combine(dir, name + ".mp4")), BorderStyle = BorderStyle.FixedSingle, Font = Theme.UiFont(10f),
-                BackColor = Theme.Current.Dark ? Color.FromArgb(24, 30, 56) : Color.White, ForeColor = Theme.Current.Text
+                BackColor = Theme.Current.InputBg, ForeColor = Theme.Current.Text
             };
             pathBox.SetBounds(pad, y + Theme.S(4), w - Theme.S(112), Theme.S(30));
             body.Controls.Add(pathBox);

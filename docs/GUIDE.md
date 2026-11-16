@@ -1,6 +1,6 @@
 # Stills & Reels user guide
 
-This guide covers everything in Stills & Reels 2.5, from first start to exporting a finished video.
+This guide covers everything in Stills & Reels 2.6, from first start to exporting a finished video.
 
 **Contents:** [Getting started](#getting-started) · [The four modes](#the-four-modes) · [Pictures](#pictures) · [Edit picture](#edit-picture) · [Snip](#snip) · [Videos](#videos) · [Video snip](#video-snip-screen-recording) · [Video editor](#video-editor) · [Settings](#settings) · [Your files and privacy](#your-files-and-privacy) · [Keyboard shortcuts](#keyboard-shortcuts) · [Taskbar shortcuts](#taskbar-shortcuts-pic-snip-and-vid-snip) · [Troubleshooting](#troubleshooting)
 
@@ -152,7 +152,7 @@ The first video you put on a new project sets the canvas size and frame rate to 
 
 Open **File > Settings** (Ctrl+,):
 
-- Dark mode (the default) or light mode
+- Dark mode (the default), light mode or Graphite (charcoal greys with a sky-blue accent). You can also switch in **View > Theme** or the **⋯** menu.
 - Follow the selection in File Explorer
 - Show the pixel grid when zoomed in to 600% or more
 - Start playing when a video is selected
