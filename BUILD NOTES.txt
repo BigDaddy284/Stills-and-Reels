@@ -99,6 +99,10 @@ Layout
                          SoundTest.cs (mixer, prepared sound, reversing video and sound),
                          ExportFormatsTest.cs (every export format, the marked range, GIF colours),
                          Bench.cs (times the renderer) and UiShot.cs (screenshots of the editor).
+                         WinKit.cs + winkit.sh: the same engine tests packed into one console exe with the
+                         bundled FFmpeg, to run on a real Windows PC (WinKit.exe, from a folder that also holds
+                         tests\fixtures). It adds what Linux can't check: which graphics-card encoders work and
+                         how an export on each compares with the processor. It writes winkit-log.txt.
                          TEST PLAN.md lists every test that must pass before a build is handed over.
 
 App icon: app.ico is compiled in twice, as the exe's icon (app.rc) and as the managed
