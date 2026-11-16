@@ -267,6 +267,7 @@ namespace StillsAndReels
                 case "layer.flatten": Prepare(); edit.FlattenLayers(); break;
                 case "layer.blend": ShowBlendMenu(); break;
                 case "layer.rename": RenameLayer(); break;
+                case "save.layers": SavePictureAs(true); break;
             }
         }
 
@@ -539,6 +540,179 @@ namespace StillsAndReels
             finally { Cursor = old; }
         }
 
+        // ==================================================================== saving
+
+        /// <summary>Opens the layers of a layered picture (.srpic) for editing; null for any other picture.</summary>
+        static EditSession OpenLayers(LoadedImage li)
+        {
+            if (li == null || !li.IsProject || li.CachePath == null) return null;
+            try { return new EditSession(PicProject.Load(li.CachePath), li.SourcePath); }
+            catch { return null; }   // falls back to the flat picture that is on screen
+        }
+
+        /// <summary>
+        /// A picture being edited that came from a layered file is saved straight back into it (it is this app's own
+        /// working file, like a video project). Returns false when that doesn't apply, or the save failed.
+        /// </summary>
+        bool SaveLayersInPlace()
+        {
+            if (mode != AppMode.PictureEdit && mode != AppMode.Pictures) return false;
+            if (edit == null || !PicProject.IsProject(edit.SourcePath)) return false;
+            try
+            {
+                Prepare();
+                string file = edit.SourcePath;
+                Busy(() => PicProject.Save(edit.State, file));
+                edit.MarkSaved();
+                Flash("Saved " + Path.GetFileName(file));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Couldn't save the picture:\n" + ex.Message, AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
+        static int SaveFilterIndex(string ext, out string outExt)
+        {
+            switch ((ext ?? "").ToLowerInvariant())
+            {
+                case ".jpg": case ".jpeg": case ".jpe": case ".jfif": outExt = ".jpg"; return 2;
+                case ".webp": outExt = ".webp"; return 3;
+                case ".bmp": case ".dib": outExt = ".bmp"; return 4;
+                case ".gif": outExt = ".gif"; return 5;
+                case ".tif": case ".tiff": outExt = ".tif"; return 6;
+                case ".srpic": outExt = ".srpic"; return 7;
+                default: outExt = ".png"; return 1;
+            }
+        }
+
+        /// <summary>Asks where to save a copy of the picture, then saves it. With <paramref name="withLayers"/> the layered kind is offered first.</summary>
+        bool SavePictureAs(bool withLayers)
+        {
+            string source = edit != null ? edit.SourcePath : (current != null ? current.SourcePath : null);
+            if (source == null && edit == null) { SystemSounds(); return false; }
+            if (edit != null) Prepare();
+            if (source == null)
+            {
+                // a new picture (pasted or snipped) that has never been saved
+                string pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+                source = Path.Combine(string.IsNullOrEmpty(pics) ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : pics, (editName ?? "Picture") + ".png");
+            }
+            bool fromLayers = PicProject.IsProject(source);
+
+            using (var dlg = new SaveFileDialog())
+            {
+                dlg.Title = "Save a copy";
+                dlg.Filter = FileTypes.SaveFilter;
+                dlg.AddExtension = true;
+                dlg.OverwritePrompt = true;
+                string dir = Path.GetDirectoryName(source);
+                if (ImageCache.IsPicked(source))
+                {
+                    // picked up from a web page or another app: it only lives in the temporary folder
+                    string pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+                    dir = string.IsNullOrEmpty(pics) ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : pics;
+                }
+                string name = Path.GetFileNameWithoutExtension(source);
+                string ext = (Path.GetExtension(source) ?? "").ToLowerInvariant();
+                // a kind the app can open but not write is saved as PNG
+                string outExt;
+                int filter = SaveFilterIndex(withLayers ? ".srpic" : ext, out outExt);
+                dlg.FilterIndex = filter;
+                dlg.DefaultExt = outExt.TrimStart('.');
+                try { dlg.InitialDirectory = dir; } catch { }
+                string suggestion;
+                if (edit != null && edit.SourcePath == null || withLayers && !fromLayers || fromLayers && outExt == ".srpic") suggestion = name;
+                else suggestion = name + " (edited)";
+                bool sameAsSource = fromLayers && outExt == ".srpic";
+                if (!sameAsSource)
+                    for (int i = 2; File.Exists(Path.Combine(dir ?? "", suggestion + outExt)) && i < 1000; i++) suggestion = name + " (edited " + i + ")";
+                dlg.FileName = suggestion + outExt;
+
+                while (true)
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return false;
+                    bool original = edit != null && edit.SourcePath != null && SamePath(dlg.FileName, edit.SourcePath) || current != null && SamePath(dlg.FileName, current.SourcePath);
+                    // the one file that may be saved over is the layered picture being edited: it is this app's working file
+                    bool ownLayers = edit != null && PicProject.IsProject(dlg.FileName) && PicProject.IsProject(edit.SourcePath) && SamePath(dlg.FileName, edit.SourcePath);
+                    if (original && !ownLayers)
+                    {
+                        MessageBox.Show(this, "Stills & Reels never overwrites the original file.\nPlease choose a different name or folder.",
+                            AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        dlg.FileName = suggestion + outExt;
+                        continue;
+                    }
+                    break;
+                }
+                return SavePictureTo(dlg.FileName);
+            }
+        }
+
+        bool SavePictureTo(string file)
+        {
+            try
+            {
+                if (PicProject.IsProject(file))
+                {
+                    if (edit != null)
+                    {
+                        Busy(() => PicProject.Save(edit.State, file));
+                        edit.SourcePath = file;
+                        edit.MarkSaved();
+                        UpdateUi();
+                    }
+                    else
+                    {
+                        if (current == null || current.Surface == null) { SystemSounds(); return false; }
+                        var one = new PicState(current.Surface.Size, new[] { PicLayer.Create("Background", current.Surface) });
+                        Busy(() => PicProject.Save(one, file));
+                    }
+                    Flash("Saved " + Path.GetFileName(file) + " with its layers");
+                    return true;
+                }
+
+                using (var bmp = CurrentPicture())
+                {
+                    if (bmp == null) { SystemSounds(); return false; }
+                    SaveOptions o = null;
+                    bool jpeg = ImageSaver.IsJpeg(file), webp = ImageSaver.IsWebp(file);
+                    if (jpeg || webp)
+                    {
+                        // photo details can come along only from an original JPEG
+                        string detailsFile = current != null && current.CachePath != null && ImageSaver.IsJpeg(current.SourcePath ?? "") &&
+                                             (edit == null || SamePath(edit.SourcePath ?? "", current.SourcePath ?? "")) && JpegDetails.Has(current.CachePath) ? current.CachePath : null;
+                        object gate = new object();
+                        Func<int, long> estimate = null;
+                        if (jpeg) estimate = q => { lock (gate) return PicCodecs.EncodeJpeg(bmp, q).LongLength; };
+                        using (var od = new SaveOptionsDialog(webp, settings.GetInt(webp ? "WebpQuality" : "JpegQuality", webp ? 90 : 92), settings.GetBool("WebpLossless", false),
+                                                              jpeg && detailsFile != null, settings.GetBool("KeepPhotoDetails", false), estimate))
+                        {
+                            var r = od.ShowDialog(this);
+                            if (r != DialogResult.OK) { lock (gate) { } return false; }
+                            o = new SaveOptions { Quality = od.Quality, Lossless = od.Lossless, DetailsFrom = od.KeepDetails ? detailsFile : null };
+                            settings.Set(webp ? "WebpQuality" : "JpegQuality", od.Quality);
+                            if (webp) settings.Set("WebpLossless", od.Lossless);
+                            if (jpeg && detailsFile != null) settings.Set("KeepPhotoDetails", od.KeepDetails);
+                        }
+                        lock (gate) { }   // a size guess still running finishes before the picture is used again
+                    }
+                    Exception failed = null;
+                    Busy(() => { try { ImageSaver.SaveWith(bmp, file, o); } catch (Exception ex) { failed = ex; } });
+                    if (failed != null) throw failed;
+                }
+                if (edit != null) edit.MarkSaved();
+                Flash("Saved " + Path.GetFileName(file));
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Couldn't save the picture:\n" + ex.Message, AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+        }
+
         // ==================================================================== layers
 
         void ShowBlendMenu()
@@ -658,6 +832,8 @@ namespace StillsAndReels
                 new ToolStripSeparator(),
                 Item("Merge do&wn", Keys.None, (s, e) => OnPictureCommand("layer.merge")),
                 Item("&Flatten", Keys.None, (s, e) => OnPictureCommand("layer.flatten")),
+                new ToolStripSeparator(),
+                Item("&Save with layers…", Keys.None, (s, e) => { if (ReadyForPicture()) SavePictureAs(true); }),
             });
             miImage.DropDownItems.AddRange(new ToolStripItem[]
             {

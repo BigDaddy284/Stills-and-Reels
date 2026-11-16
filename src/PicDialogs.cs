@@ -125,6 +125,13 @@ namespace StillsAndReels
         /// <summary>Called when OK is pressed; return false to keep the dialog open.</summary>
         protected virtual bool Accept() { return true; }
 
+        public static string FileSize(long bytes)
+        {
+            if (bytes < 1024) return bytes + " bytes";
+            if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString(bytes < 10240 ? "0.0" : "0") + " KB";
+            return (bytes / (1024.0 * 1024.0)).ToString(bytes < 10L * 1024 * 1024 ? "0.00" : "0.0") + " MB";
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (keyData == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); return true; }
@@ -590,6 +597,80 @@ namespace StillsAndReels
             R = new byte[256]; G = new byte[256]; B = new byte[256];
             for (int i = 0; i < 256; i++) { R[i] = all[r[i]]; G[i] = all[g[i]]; B[i] = all[b[i]]; }
             if (preview != null) preview(R, G, B);
+        }
+    }
+
+    /// <summary>Quality for a JPEG or WebP copy, with a live guess of the file size.</summary>
+    internal sealed class SaveOptionsDialog : PicDialog
+    {
+        readonly SliderRow quality;
+        readonly ThemedToggle lossless, details;
+        readonly Label size;
+        readonly Func<int, long> estimate;
+        readonly Timer wait = new Timer { Interval = 250 };
+        int asked;
+        bool closed;
+
+        public int Quality { get { return quality.Value; } }
+        public bool Lossless { get { return lossless != null && lossless.Checked; } }
+        public bool KeepDetails { get { return details != null && details.Checked; } }
+
+        /// <param name="estimate">Returns the file size in bytes for a quality (run in the background), or null for no guess.</param>
+        public SaveOptionsDialog(bool webp, int startQuality, bool startLossless, bool canKeepDetails, bool keepDetails, Func<int, long> estimate)
+            : base(webp ? "WebP options" : "JPEG options", 400)
+        {
+            this.estimate = estimate;
+            Note(webp ? "Higher quality keeps more detail and makes a bigger file. 80 to 90 suits most pictures."
+                      : "Higher quality keeps more detail and makes a bigger file. 85 to 95 suits most photos.");
+            quality = Slider("Quality", 1, 100, Math.Max(1, Math.Min(100, startQuality)));
+            if (webp) lossless = Toggle("Keep every pixel exact (lossless, bigger file)", startLossless);
+            if (canKeepDetails) details = Toggle("Keep photo details (date, camera, place)", keepDetails);
+            size = Caption("", Pad, Y, Inner);
+            size.ForeColor = Theme.Current.Muted;
+            Y += Theme.S(30);
+            if (canKeepDetails) Note("Photo details are left out unless you turn this on. The small preview stored inside them is always removed, so nothing you hid can show through.");
+            quality.ValueChanged += (s, e) => Ask();
+            if (lossless != null) lossless.CheckedChanged += (s, e) => { quality.Enabled = !lossless.Checked; };
+            if (lossless != null) quality.Enabled = !lossless.Checked;
+            wait.Tick += (s, e) => { wait.Stop(); Run(); };
+            Finish("Save");
+            Ask();
+        }
+
+        void Ask()
+        {
+            if (estimate == null) return;
+            wait.Stop(); wait.Start();
+        }
+
+        void Run()
+        {
+            int q = quality.Value, mine = ++asked;
+            size.Text = "Working out the size…";
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                long bytes = -1;
+                try { if (!closed) bytes = estimate(q); } catch { }
+                try
+                {
+                    if (closed || IsDisposed || !IsHandleCreated) return;
+                    BeginInvoke((Action)(() =>
+                    {
+                        if (mine != asked || closed) return;
+                        size.Text = bytes > 0 ? "About " + PicDialog.FileSize(bytes) + " at this quality" : "";
+                    }));
+                }
+                catch { }
+            });
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e) { closed = true; wait.Stop(); base.OnFormClosed(e); }
+
+        protected override void Dispose(bool disposing)
+        {
+            closed = true;
+            if (disposing) wait.Dispose();
+            base.Dispose(disposing);
         }
     }
 }

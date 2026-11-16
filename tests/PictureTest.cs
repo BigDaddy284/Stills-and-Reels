@@ -609,6 +609,186 @@ static class PictureTest
         foreach (var f in new[] { file, bad }) try { File.Delete(f); } catch { }
     }
 
+    /// <summary>A hand-made EXIF block: orientation 6, a camera name, a recorded size, and a preview picture in the second list.</summary>
+    static byte[] MakeExif(out int thumbAt, out int thumbLen)
+    {
+        var t = new List<byte>();
+        Action<int> u16 = v => { t.Add((byte)v); t.Add((byte)(v >> 8)); };
+        Action<int> u32 = v => { t.Add((byte)v); t.Add((byte)(v >> 8)); t.Add((byte)(v >> 16)); t.Add((byte)(v >> 24)); };
+        t.AddRange(new byte[] { (byte)'I', (byte)'I' }); u16(42); u32(8);
+        // IFD0 at 8: Make, Orientation, ExifIFD pointer
+        const int ifd0 = 8, n0 = 3, makeAt = ifd0 + 2 + n0 * 12 + 4;         // 50
+        const int exifAt = makeAt + 8;                                       // 58
+        const int ifd1 = exifAt + 2 + 2 * 12 + 4;                            // 88
+        const int thumb = ifd1 + 2 + 2 * 12 + 4;                             // 118
+        u16(n0);
+        u16(0x010F); u16(2); u32(8); u32(makeAt);                            // Make: ASCII, 8 bytes
+        u16(0x0112); u16(3); u32(1); u16(6); u16(0);                         // Orientation = 6
+        u16(0x8769); u16(4); u32(1); u32(exifAt);                            // Exif sub-list
+        u32(ifd1);
+        t.AddRange(System.Text.Encoding.ASCII.GetBytes("TestCam\0"));
+        u16(2);
+        u16(0xA002); u16(4); u32(1); u32(4000);                              // recorded width
+        u16(0xA003); u16(3); u32(1); u16(3000); u16(0);                      // recorded height
+        u32(0);
+        u16(2);
+        u16(0x0201); u16(4); u32(1); u32(thumb);
+        u16(0x0202); u16(4); u32(1); u32(12);
+        u32(0);
+        t.AddRange(System.Text.Encoding.ASCII.GetBytes("SECRETTHUMB!"));
+        var seg = new List<byte> { 0xFF, 0xE1 };
+        int len = 2 + 6 + t.Count;
+        seg.Add((byte)(len >> 8)); seg.Add((byte)len);
+        seg.AddRange(System.Text.Encoding.ASCII.GetBytes("Exif\0\0"));
+        seg.AddRange(t);
+        thumbAt = 10 + thumb; thumbLen = 12;
+        return seg.ToArray();
+    }
+
+    static bool Contains(byte[] hay, string needle)
+    {
+        var n = System.Text.Encoding.ASCII.GetBytes(needle);
+        for (int i = 0; i + n.Length <= hay.Length; i++)
+        {
+            int k = 0;
+            while (k < n.Length && hay[i + k] == n[k]) k++;
+            if (k == n.Length) return true;
+        }
+        return false;
+    }
+
+    static void Formats(string dir)
+    {
+        ImageCache.Initialize();
+        var made = new List<string>();
+        Func<string, string> F = name => { string f = Path.Combine(dir, name); made.Add(f); return f; };
+
+        // a picture with solid, see-through and half see-through parts
+        PicSurface src = Gradient(160, 100);
+        src.Fill(new Rectangle(100, 0, 60, 50), 0);
+        src.Fill(new Rectangle(100, 50, 60, 50), PicSurface.Premultiply(Color.FromArgb(128, 255, 0, 0)));
+
+        // the bitmap bridge used to talk to FFmpeg
+        string bmpFile = F("pt-bridge.bmp");
+        using (var b = src.ToBitmap()) PicCodecs.WriteBmp(b, bmpFile);
+        using (var fs = File.OpenRead(bmpFile))
+        using (var back = PicCodecs.ReadBmp(fs))
+            Check(Same(src, back), "the bitmap bridge keeps every pixel, see-through ones too");
+
+        // WebP, exact
+        string webp = F("pt-exact.webp");
+        using (var b = src.ToBitmap()) ImageSaver.SaveWith(b, webp, new SaveOptions { Lossless = true });
+        Check(File.Exists(webp) && new FileInfo(webp).Length > 0, "a WebP picture is written");
+        var li = LoadedImage.Load(webp);
+        Check(li.Surface != null && li.Surface.Size == src.Size && li.HasAlpha, "a WebP picture opens, with its transparency");
+        bool exact = true;
+        foreach (var pt in new[] { new Point(5, 5), new Point(90, 80), new Point(130, 20), new Point(130, 75) })
+        {
+            Color a = src.GetColor(pt.X, pt.Y), c = li.Surface.GetColor(pt.X, pt.Y);
+            if (Math.Abs(a.A - c.A) > 1 || (a.A > 0 && !Near(c, a.R, a.G, a.B, 2))) exact = false;
+        }
+        Check(exact, "exact WebP gives the same pixels back");
+        ImageCache.Delete(li.CachePath); li.Dispose();
+
+        // WebP, by quality
+        string webLo = F("pt-lo.webp"), webHi = F("pt-hi.webp");
+        using (var photo = new PicSurface(320, 240))
+        {
+            var rnd = new Random(7);
+            unsafe
+            {
+                for (int y = 0; y < 240; y++)
+                {
+                    uint* p = photo.Row(y);
+                    for (int x = 0; x < 320; x++)
+                    {
+                        int n = rnd.Next(40);
+                        p[x] = 0xFF000000u | ((uint)Math.Min(255, x / 2 + n) << 16) | ((uint)Math.Min(255, y + n) << 8) | (uint)Math.Min(255, (x + y) / 3 + n);
+                    }
+                }
+            }
+            using (var b = photo.ToBitmap())
+            {
+                ImageSaver.SaveWith(b, webLo, new SaveOptions { Quality = 20 });
+                ImageSaver.SaveWith(b, webHi, new SaveOptions { Quality = 95 });
+                long lo = new FileInfo(webLo).Length, hi = new FileInfo(webHi).Length;
+                Check(lo > 0 && hi > lo * 1.5, "WebP quality changes the file size (" + lo + " and " + hi + " bytes)");
+                var back = LoadedImage.Load(webHi);
+                Check(back.Surface.Size == photo.Size && !back.HasAlpha && Near(back.Surface.GetColor(200, 120), photo.GetColor(200, 120).R, photo.GetColor(200, 120).G, photo.GetColor(200, 120).B, 40), "a WebP photo opens looking like the photo");
+                ImageCache.Delete(back.CachePath); back.Dispose();
+
+                // JPEG quality
+                string jLo = F("pt-lo.jpg"), jHi = F("pt-hi.jpg");
+                ImageSaver.SaveWith(b, jLo, new SaveOptions { Quality = 25 });
+                ImageSaver.SaveWith(b, jHi, new SaveOptions { Quality = 97 });
+                long jl = new FileInfo(jLo).Length, jh = new FileInfo(jHi).Length;
+                Check(jl > 0 && jh > jl * 1.5, "JPEG quality changes the file size (" + jl + " and " + jh + " bytes)");
+                Check(PicCodecs.EncodeJpeg(b, 25).LongLength == jl, "the size guess in the save box matches what is written");
+                Check(JpegDetails.Read(File.ReadAllBytes(jHi)) == null, "a saved JPEG carries no photo details unless asked");
+
+                // photo details
+                int thumbAt, thumbLen;
+                byte[] exif = MakeExif(out thumbAt, out thumbLen);
+                string orig = F("pt-details.jpg");
+                File.WriteAllBytes(orig, JpegDetails.Insert(PicCodecs.EncodeJpeg(b, 80), exif));
+                Check(JpegDetails.Has(orig) && Contains(File.ReadAllBytes(orig), "SECRETTHUMB!"), "the test photo has details and a preview inside");
+                string kept = F("pt-kept.jpg");
+                ImageSaver.SaveWith(b, kept, new SaveOptions { Quality = 90, DetailsFrom = orig });
+                byte[] keptBytes = File.ReadAllBytes(kept);
+                byte[] seg = JpegDetails.Read(keptBytes);
+                Check(seg != null && Contains(seg, "TestCam"), "asked to, a saved JPEG keeps the camera details");
+                Check(!Contains(keptBytes, "SECRETTHUMB!") && !Contains(keptBytes, "THUMB"), "the old preview picture inside the details is wiped");
+                Check(seg != null && seg[10 + 8 + 2 + 12 + 8] == 1, "the copy is marked upright, because its pixels already are");
+                Check(seg != null && BitConverter.ToInt32(seg, 10 + 58 + 2 + 8) == 320 && BitConverter.ToUInt16(seg, 10 + 58 + 2 + 12 + 8) == 240, "the recorded size is the copy's own");
+                Check(seg != null && BitConverter.ToInt32(seg, 10 + 8 + 2 + 3 * 12) == 0, "the second list of details is unlinked");
+                using (var img = Image.FromFile(kept)) Check(img.Width == 320 && img.Height == 240, "a JPEG with details still opens normally");
+                var liKept = LoadedImage.Load(kept);
+                Check(liKept.Surface.Width == 320 && liKept.Surface.Height == 240, "and it is not turned a second time");
+                ImageCache.Delete(liKept.CachePath); liKept.Dispose();
+                Check(Contains(File.ReadAllBytes(orig), "SECRETTHUMB!"), "the original photo is untouched");
+            }
+        }
+        Check(JpegDetails.Clean(new byte[] { 0xFF, 0xE1, 0, 20, (byte)'E', (byte)'x', (byte)'i', (byte)'f', 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 }) == null, "details that can't be understood are left out, not guessed at");
+        Check(JpegDetails.Read(new byte[] { 1, 2, 3 }) == null && JpegDetails.Read(null) == null, "a file that is not a JPEG has no details");
+
+        // a format Windows can't read by itself (PPM), through FFmpeg
+        string ppm = F("pt-small.ppm");
+        using (var fs = File.Create(ppm))
+        {
+            var head = System.Text.Encoding.ASCII.GetBytes("P6\n3 2\n255\n");
+            fs.Write(head, 0, head.Length);
+            fs.Write(new byte[] { 255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30, 200, 100, 50, 255, 255, 255 }, 0, 18);
+        }
+        li = LoadedImage.Load(ppm);
+        Check(li.Surface.Width == 3 && li.Surface.Height == 2 && li.Surface.GetColor(0, 0) == Color.FromArgb(255, 255, 0, 0) && li.Surface.GetColor(2, 0) == Color.FromArgb(255, 0, 0, 255) &&
+              li.Surface.GetColor(0, 1) == Color.FromArgb(255, 10, 20, 30) && li.Surface.GetColor(1, 1) == Color.FromArgb(255, 200, 100, 50), "a PPM picture opens through FFmpeg, the right way up");
+        ImageCache.Delete(li.CachePath); li.Dispose();
+
+        string junk = F("pt-junk.webp");
+        File.WriteAllBytes(junk, System.Text.Encoding.ASCII.GetBytes("this is not a picture at all"));
+        string message = null;
+        try { LoadedImage.Load(junk).Dispose(); } catch (Exception ex) { message = ex.Message; }
+        Check(message != null && message.IndexOf("video", StringComparison.OrdinalIgnoreCase) < 0 && message.IndexOf('[') < 0 && message.IndexOf("stream", StringComparison.OrdinalIgnoreCase) < 0, "a broken picture gives a plain message (" + message + ")");
+        Check(Directory.GetFiles(ImageCache.Folder, "*.webp").Length == 0, "nothing is left in the temporary folder after a failed open");
+
+        // a layered picture opens flat in the viewer, with its layers kept for the editor
+        string proj = F("pt-view" + PicProject.Extension);
+        var es = new EditSession(src.Clone(), null, false);
+        es.AddLayer("Dot", Solid(20, 20, Color.Blue), 10, 10);
+        PicProject.Save(es.State, proj);
+        li = LoadedImage.Load(proj);
+        Check(li.IsProject && li.Surface != null && li.Surface.Size == src.Size && li.Surface.GetColor(15, 15) == Color.FromArgb(255, 0, 0, 255) && li.Surface.GetColor(50, 50) == src.GetColor(50, 50), "a layered picture is shown as one picture");
+        var st = PicProject.Load(li.CachePath);
+        Check(st.Layers.Length == 2, "and its layers are still there for the editor");
+        foreach (var l in st.Layers) if (l.Pixels != null) l.Pixels.Dispose();
+        ImageCache.Delete(li.CachePath); li.Dispose();
+        es.Dispose();
+        src.Dispose();
+
+        Check(FileTypes.Classify("holiday.HEIC") == FileKind.Image && FileTypes.NeedsFfmpeg("a.avif") && !FileTypes.NeedsFfmpeg("a.png") && FileTypes.Classify("a.cr2") == FileKind.Incompatible, "the list of picture kinds is right");
+        foreach (var f in made) try { File.Delete(f); } catch { }
+    }
+
     static int Main(string[] args)
     {
         string dir = args.Length > 0 ? args[0] : Path.GetTempPath();
@@ -624,6 +804,7 @@ static class PictureTest
             Adjustments();
             StraightenAndTrim();
             Projects(dir);
+            Formats(dir);
         }
         catch (Exception ex) { Console.WriteLine("FAIL exception: " + ex); fails++; }
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");

@@ -130,7 +130,8 @@ namespace StillsAndReels
         /// <summary>How much memory the undo history may hold before the oldest steps are dropped.</summary>
         public static long UndoBudget = DefaultBudget();
 
-        public readonly string SourcePath;
+        /// <summary>The file this picture came from (or was last saved to as a layered picture); null for a new picture.</summary>
+        public string SourcePath;
         readonly List<PicStep> undo = new List<PicStep>();
         readonly List<PicStep> redo = new List<PicStep>();
         readonly HashSet<PicSurface> owned = new HashSet<PicSurface>();
@@ -937,21 +938,36 @@ namespace StillsAndReels
     internal static class ImageSaver
     {
         /// <summary>Saves a bitmap. The format follows the file extension.</summary>
-        public static void Save(Bitmap bmp, string path)
+        public static void Save(Bitmap bmp, string path) { SaveWith(bmp, path, null); }
+
+        public static bool IsJpeg(string path)
         {
             string ext = (Path.GetExtension(path) ?? "").ToLowerInvariant();
-            if (ext == ".jpg" || ext == ".jpeg" || ext == ".jpe" || ext == ".jfif")
+            return ext == ".jpg" || ext == ".jpeg" || ext == ".jpe" || ext == ".jfif";
+        }
+
+        public static bool IsWebp(string path) { return string.Equals(Path.GetExtension(path), ".webp", StringComparison.OrdinalIgnoreCase); }
+
+        /// <summary>Saves a bitmap with a chosen quality (JPEG, WebP) and, for JPEG, optional photo details.</summary>
+        public static void SaveWith(Bitmap bmp, string path, SaveOptions o)
+        {
+            if (o == null) o = new SaveOptions();
+            string ext = (Path.GetExtension(path) ?? "").ToLowerInvariant();
+            if (IsJpeg(path))
             {
-                using (var flat = OnWhite(bmp))
+                byte[] jpeg = PicCodecs.EncodeJpeg(bmp, o.Quality);
+                if (o.DetailsFrom != null)
                 {
-                    var codec = Array.Find(ImageCodecInfo.GetImageEncoders(), c => c.FormatID == ImageFormat.Jpeg.Guid);
-                    using (var p = new EncoderParameters(1))
+                    try
                     {
-                        p.Param[0] = new EncoderParameter(Encoder.Quality, 92L);
-                        flat.Save(path, codec, p);
+                        var details = JpegDetails.Clean(JpegDetails.Read(File.ReadAllBytes(o.DetailsFrom)), bmp.Width, bmp.Height);
+                        if (details != null) jpeg = JpegDetails.Insert(jpeg, details);
                     }
+                    catch { }   // details are a nicety: the picture is saved either way
                 }
+                File.WriteAllBytes(path, jpeg);
             }
+            else if (ext == ".webp") PicCodecs.SaveWebp(bmp, path, o.Quality, o.Lossless);
             else if (ext == ".bmp" || ext == ".dib")
             {
                 using (var flat = OnWhite(bmp)) flat.Save(path, ImageFormat.Bmp);

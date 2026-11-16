@@ -819,7 +819,8 @@ namespace StillsAndReels
 
         void StartEditSession()
         {
-            edit = current.Surface != null ? new EditSession(current.Surface.Clone(), current.SourcePath, false) : new EditSession(current.Image, current.SourcePath);
+            edit = OpenLayers(current);
+            if (edit == null) edit = current.Surface != null ? new EditSession(current.Surface.Clone(), current.SourcePath, false) : new EditSession(current.Image, current.SourcePath);
             edit.Changed += (s, e) => OnPictureEditChanged();
             canvas.Edit = edit;
         }
@@ -834,7 +835,7 @@ namespace StillsAndReels
                 var r = MessageBox.Show(this, "Save your edits as a new picture first?\n\nYour original file is never changed.",
                     AppName, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
                 if (r == DialogResult.Cancel) return false;
-                if (r == DialogResult.Yes && !SaveAs()) return false;
+                if (r == DialogResult.Yes && !SaveLayersInPlace() && !SaveAs()) return false;
             }
             DropAdjust(true);
             canvas.Edit = null;
@@ -1031,7 +1032,7 @@ namespace StillsAndReels
             shownPath = path;
             string ext = (Path.GetExtension(path) ?? "").TrimStart('.').ToUpperInvariant();
             canvas.ShowMessage("Incompatible File Type",
-                Path.GetFileName(path) + "\n" + ext + " files can't be previewed.\nSupported: JPG, PNG, BMP, GIF, TIFF and ICO.");
+                Path.GetFileName(path) + "\n" + ext + " files can't be previewed.\nSupported: JPG, PNG, WebP, HEIC, AVIF, GIF, TIFF, BMP, ICO, TGA, PSD and more.");
             UpdateUi();
         }
 
@@ -1517,73 +1518,7 @@ namespace StillsAndReels
         {
             if (mode == AppMode.Videos) { SystemSounds(); return false; }
             if (mode == AppMode.VideoEdit) return editor.SaveProject(false);
-            string source = edit != null ? edit.SourcePath : (current != null ? current.SourcePath : null);
-            if (source == null && edit == null) { SystemSounds(); return false; }
-            if (source == null)
-            {
-                // a new picture (pasted or snipped) that has never been saved
-                string pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-                source = Path.Combine(string.IsNullOrEmpty(pics) ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : pics, (editName ?? "Picture") + ".png");
-            }
-
-            using (var dlg = new SaveFileDialog())
-            {
-                dlg.Title = "Save a copy";
-                dlg.Filter = FileTypes.SaveFilter;
-                dlg.AddExtension = true;
-                dlg.OverwritePrompt = true;
-                string dir = Path.GetDirectoryName(source);
-                if (ImageCache.IsPicked(source))
-                {
-                    // picked up from a web page or another app: it only lives in the temporary folder
-                    string pics = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-                    dir = string.IsNullOrEmpty(pics) ? Environment.GetFolderPath(Environment.SpecialFolder.Desktop) : pics;
-                }
-                string name = Path.GetFileNameWithoutExtension(source);
-                string ext = (Path.GetExtension(source) ?? "").ToLowerInvariant();
-                int filter;
-                string outExt;
-                switch (ext)
-                {
-                    case ".jpg": case ".jpeg": case ".jpe": case ".jfif": filter = 2; outExt = ".jpg"; break;
-                    case ".bmp": case ".dib": filter = 3; outExt = ".bmp"; break;
-                    case ".gif": filter = 4; outExt = ".gif"; break;
-                    case ".tif": case ".tiff": filter = 5; outExt = ".tif"; break;
-                    default: filter = 1; outExt = ".png"; break;
-                }
-                dlg.FilterIndex = filter;
-                dlg.DefaultExt = outExt.TrimStart('.');
-                try { dlg.InitialDirectory = dir; } catch { }
-                string suggestion = edit != null && edit.SourcePath == null ? name : name + " (edited)";
-                for (int i = 2; File.Exists(Path.Combine(dir ?? "", suggestion + outExt)) && i < 1000; i++) suggestion = name + " (edited " + i + ")";
-                dlg.FileName = suggestion + outExt;
-
-                while (true)
-                {
-                    if (dlg.ShowDialog(this) != DialogResult.OK) return false;
-                    if (edit != null && edit.SourcePath != null && SamePath(dlg.FileName, edit.SourcePath) || current != null && SamePath(dlg.FileName, current.SourcePath))
-                    {
-                        MessageBox.Show(this, "Stills & Reels never overwrites the original file.\nPlease choose a different name or folder.",
-                            AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        dlg.FileName = suggestion + outExt;
-                        continue;
-                    }
-                    break;
-                }
-
-                try
-                {
-                    using (var bmp = CurrentPicture()) ImageSaver.Save(bmp, dlg.FileName);
-                    if (edit != null) edit.MarkSaved();
-                    Flash("Saved " + Path.GetFileName(dlg.FileName));
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, "Couldn't save the picture:\n" + ex.Message, AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return false;
-                }
-            }
+            return SavePictureAs(false);
         }
 
         // ==================================================================== file actions
@@ -1699,7 +1634,7 @@ namespace StillsAndReels
             }
             switch (keyData)
             {
-                case Keys.Control | Keys.S: SaveAs(); return true;
+                case Keys.Control | Keys.S: if (!SaveLayersInPlace()) SaveAs(); return true;
                 case Keys.Control | Keys.Add: canvas.ZoomIn(); return true;
                 case Keys.Control | Keys.Subtract: canvas.ZoomOut(); return true;
                 case Keys.Control | Keys.NumPad0: canvas.FitToWindow(); return true;

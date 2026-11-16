@@ -311,7 +311,10 @@ namespace StillsAndReels
             layerMerge = Button(Ico.MergeDown, "Merge down", "Mix this layer into the one below it", "layer.merge");
             layerFlatten = Button(Ico.Layers, "Flatten", "Mix all layers into one", "layer.flatten");
             Row(2, null, layerMerge, layerFlatten);
-            Add(2, null, new HintLabel { Text = "Each paste arrives as its own layer. Shapes and text stay editable on their layer. Save as a Stills & Reels picture (.srpic) to keep layers for later." });
+            var saveLayers = Button(Ico.Save, "Save with layers…", "Save a picture file that keeps every layer, shape and text box, so you can carry on editing later (.srpic)", "save.layers");
+            needPicture.Add(saveLayers);
+            Add(2, null, saveLayers);
+            Add(2, null, new HintLabel { Text = "Each paste arrives as its own layer. Shapes and text stay editable on their layer. \"Save with layers\" keeps all of that for later; other kinds of picture file are saved flat." });
 
             Add(-1, null, new SectionLabel("Keep a copy"));
             Row(-1, null, copy, save);
