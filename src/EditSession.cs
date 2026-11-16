@@ -680,6 +680,45 @@ namespace StillsAndReels
             Commit("Resize", new PicState(new Size(w, h), layers));
         }
 
+        /// <summary>
+        /// Turns the whole picture by any angle (degrees, clockwise) about its middle. With <paramref name="cropToFit"/>
+        /// the empty corners are cut away; otherwise the canvas grows to hold everything. Drawings become pixels.
+        /// </summary>
+        public void RotateFree(double degrees, bool cropToFit)
+        {
+            if (Math.Abs(degrees) < 0.005) return;
+            Size outSize;
+            if (cropToFit)
+            {
+                var inside = PicAdjust.LargestInside(Size.Width, Size.Height, degrees);
+                outSize = new Size(Math.Max(1, (int)Math.Floor(inside.Width)), Math.Max(1, (int)Math.Floor(inside.Height)));
+            }
+            else
+            {
+                double a = Math.Abs(degrees * Math.PI / 180.0), sin = Math.Abs(Math.Sin(a)), cos = Math.Abs(Math.Cos(a));
+                outSize = new Size((int)Math.Ceiling(Size.Width * cos + Size.Height * sin), (int)Math.Ceiling(Size.Width * sin + Size.Height * cos));
+            }
+            var layers = new PicLayer[State.Layers.Length];
+            for (int i = 0; i < layers.Length; i++)
+            {
+                var l = State.Layers[i];
+                if (l.Pixels == null && !l.HasObjects) { layers[i] = l; continue; }
+                using (var full = PicCompositor.RenderLayer(State, l))
+                    layers[i] = l.WithPixels(PicAdjust.Rotated(full, degrees, outSize), 0, 0).WithObjects(null);
+            }
+            Commit(cropToFit ? "Straighten" : "Rotate", new PicState(outSize, layers));
+        }
+
+        /// <summary>Cuts plain borders (see-through or one flat colour) off the picture. False when there is nothing to trim.</summary>
+        public bool TrimEdges()
+        {
+            Rectangle r;
+            using (var flat = PicCompositor.Flatten(State)) r = PicAdjust.TrimBounds(flat);
+            if (r == State.Bounds) return false;
+            Crop(r);
+            return true;
+        }
+
         // ------------------------------------------------------------------ layers
 
         /// <summary>Adds a layer above the active one and makes it active. Takes ownership of the pixels (which may be null).</summary>
