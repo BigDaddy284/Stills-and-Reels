@@ -409,12 +409,15 @@ namespace StillsAndReels
 
         /// <summary>
         /// A canvas-sized picture turned about its middle by an angle (degrees, clockwise), then cropped to
-        /// <paramref name="outSize"/> around the middle.
+        /// <paramref name="outSize"/> around the middle. With <paramref name="solidEdges"/> the picture's own edge is
+        /// never mixed with the emptiness beyond it (used when the result is cropped to lie inside the picture, so
+        /// that no see-through fringe can reach the crop).
         /// </summary>
-        public static PicSurface Rotated(PicSurface canvasSized, double degrees, Size outSize)
+        public static PicSurface Rotated(PicSurface canvasSized, double degrees, Size outSize, bool solidEdges = false)
         {
             var d = new PicSurface(outSize.Width, outSize.Height);
             using (var g = d.CreateGraphics())
+            using (var attrs = new System.Drawing.Imaging.ImageAttributes())
             {
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
@@ -422,7 +425,14 @@ namespace StillsAndReels
                 g.TranslateTransform(outSize.Width / 2f, outSize.Height / 2f);
                 g.RotateTransform((float)degrees);
                 g.TranslateTransform(-canvasSized.Width / 2f, -canvasSized.Height / 2f);
-                g.DrawImage(canvasSized.Bitmap, new Rectangle(0, 0, canvasSized.Width, canvasSized.Height), 0, 0, canvasSized.Width, canvasSized.Height, GraphicsUnit.Pixel);
+                var all = new Rectangle(0, 0, canvasSized.Width, canvasSized.Height);
+                if (solidEdges)
+                {
+                    // sampling past the edge mirrors the picture instead of reading "nothing"
+                    attrs.SetWrapMode(WrapMode.TileFlipXY);
+                    g.DrawImage(canvasSized.Bitmap, all, 0, 0, canvasSized.Width, canvasSized.Height, GraphicsUnit.Pixel, attrs);
+                }
+                else g.DrawImage(canvasSized.Bitmap, all, 0, 0, canvasSized.Width, canvasSized.Height, GraphicsUnit.Pixel);
             }
             return d;
         }

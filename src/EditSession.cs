@@ -692,7 +692,9 @@ namespace StillsAndReels
             if (cropToFit)
             {
                 var inside = PicAdjust.LargestInside(Size.Width, Size.Height, degrees);
-                outSize = new Size(Math.Max(1, (int)Math.Floor(inside.Width)), Math.Max(1, (int)Math.Floor(inside.Height)));
+                // one pixel in from the exact fit on every side: the turned picture's outermost pixels are where
+                // drawing rounds differently from one graphics library to the next, and a see-through corner must not get in
+                outSize = new Size(Math.Max(1, (int)Math.Floor(inside.Width) - 2), Math.Max(1, (int)Math.Floor(inside.Height) - 2));
             }
             else
             {
@@ -705,7 +707,7 @@ namespace StillsAndReels
                 var l = State.Layers[i];
                 if (l.Pixels == null && !l.HasObjects) { layers[i] = l; continue; }
                 using (var full = PicCompositor.RenderLayer(State, l))
-                    layers[i] = l.WithPixels(PicAdjust.Rotated(full, degrees, outSize), 0, 0).WithObjects(null);
+                    layers[i] = l.WithPixels(PicAdjust.Rotated(full, degrees, outSize, cropToFit), 0, 0).WithObjects(null);
             }
             Commit(cropToFit ? "Straighten" : "Rotate", new PicState(outSize, layers));
         }

@@ -517,6 +517,24 @@ static class PictureTest
                 if (c.A < 250 || !Near(c, 20, 120, 220, 6)) solid = false;
             }
             Check(solid, "after straighten with crop there are no empty corners");
+            // the whole outline, not just the corners
+            int bad = 0;
+            for (int x = 0; x < flat.Width; x++) foreach (int y in new[] { 0, flat.Height - 1 }) { var c = flat.GetColor(x, y); if (c.A < 250 || !Near(c, 20, 120, 220, 6)) bad++; }
+            for (int y = 0; y < flat.Height; y++) foreach (int x in new[] { 0, flat.Width - 1 }) { var c = flat.GetColor(x, y); if (c.A < 250 || !Near(c, 20, 120, 220, 6)) bad++; }
+            Check(bad == 0, "and no see-through or faded pixel anywhere along its edges (" + bad + " found)");
+        }
+        foreach (double angle in new[] { -12.5, 0.3, 33, 45, 80, 100 })
+        {
+            var e2 = new EditSession(Solid(321, 207, Color.FromArgb(255, 20, 120, 220)), null, false);
+            e2.RotateFree(angle, true);
+            using (var flat = e2.FlattenSurface())
+            {
+                int bad = 0;
+                for (int y = 0; y < flat.Height; y++)
+                    for (int x = 0; x < flat.Width; x++) { var c = flat.GetColor(x, y); if (c.A < 250 || !Near(c, 20, 120, 220, 6)) bad++; }
+                Check(bad == 0 && flat.Width >= 1 && flat.Height >= 1, "straighten by " + angle + " degrees with crop leaves no empty or faded pixel (" + flat.Width + " x " + flat.Height + ", " + bad + " bad)");
+            }
+            e2.Dispose();
         }
         es.Undo();
         Check(es.Size == new Size(400, 300), "undo gives the size back");
