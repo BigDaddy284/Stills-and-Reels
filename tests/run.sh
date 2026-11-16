@@ -1,8 +1,8 @@
 #!/bin/bash
 # Builds the app and runs the Linux tests (Mono, Xvfb, openbox, system ffmpeg, Python 3 with Pillow for fixtures).
-#   tests/run.sh            quick set: logic, pickup, compositor, project, export, scrub
+#   tests/run.sh            quick set: logic, pickup, picture, compositor, project, export, scrub
 #   tests/run.sh all        adds the window tests (close, hide, snip windows, theme) and the recording finish test
-#   tests/run.sh <name>...  only the named tests (logic pickup compose export scrub play close hide snip theme finish bench)
+#   tests/run.sh <name>...  only the named tests (logic pickup picture compose export scrub play close hide snip theme finish bench)
 # The recording sync tests (AvSyncTest) are run by hand: see the comment at the top of tests/AvSyncTest.cs.
 set -u
 cd "$(dirname "$0")/.."
@@ -59,6 +59,7 @@ run() { # label command...
 
 t_logic()   { compile logic && run logic mono "$WORK/logic.exe"; }
 t_pickup()  { compile pickup && run pickup mono "$WORK/pickup.exe" "$SR_EXE"; }
+t_picture() { compile PictureTest -main:PictureTest $WITH_SRC && run picture mono "$WORK/PictureTest.exe" "$WORK"; }
 t_compose() { [ -f tests/ComposeTest.cs ] || return 0; compile ComposeTest -main:ComposeTest $WITH_SRC && run compose mono "$WORK/ComposeTest.exe"; }
 t_export()  {
   compile ExportTest || return
@@ -77,8 +78,8 @@ t_finish()  { compile FinishTest && run finish mono "$WORK/FinishTest.exe" "$SR_
 t_bench()   { [ -f tests/Bench.cs ] || return 0; compile Bench -main:Bench $WITH_SRC && mono "$WORK/Bench.exe" "$WORK"; }
 
 fixtures
-SET="${*:-logic pickup compose export scrub}"
-[ "$SET" = "all" ] && SET="logic pickup compose export scrub play close hide snip theme finish"
+SET="${*:-logic pickup picture compose export scrub}"
+[ "$SET" = "all" ] && SET="logic pickup picture compose export scrub play close hide snip theme finish"
 for t in $SET; do "t_$t"; done
 if [ -n "$FAILED" ]; then echo "FAILED:$FAILED"; exit 1; fi
 echo "ALL TESTS PASSED ($SET)"

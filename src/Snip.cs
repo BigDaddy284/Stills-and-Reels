@@ -433,7 +433,7 @@ namespace StillsAndReels
             bColor.Invalidate();
             bUndo.Enabled = has && session.CanUndo;
             bRedo.Enabled = has && session.CanRedo;
-            bClear.Enabled = has && session.Current.Strokes.Length > 0;
+            bClear.Enabled = has && session.HasInk;
             bCopy.Enabled = bSave.Enabled = bSend.Enabled = has;
             sizeSlider.Maximum = tool == EditTool.Pen ? 30 : 60;
             sizeSlider.SetSilently(sizes[tool]);

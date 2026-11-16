@@ -124,15 +124,56 @@ namespace StillsAndReels
     {
         public string SourcePath;
         public string CachePath;
+        /// <summary>The picture as a GDI+ image. For still pictures this is a view of Surface, not a copy.</summary>
         public Image Image;
+        /// <summary>Still pictures: the pixels, and half-size copies of them for fast zoomed-out drawing.</summary>
+        public PicSurface Surface;
+        public PicMips Mips;
+        public bool HasAlpha;
         public bool IsAnimated;
         public long FileSize;
         MemoryStream stream; // kept open only for animated GIFs (GDI+ reads frames lazily)
 
         public void Dispose()
         {
+            if (Mips != null) { Mips.Dispose(); Mips = null; }
+            if (Surface != null) { Surface.Dispose(); Surface = null; Image = null; }
             if (Image != null) { Image.Dispose(); Image = null; }
             if (stream != null) { stream.Dispose(); stream = null; }
+        }
+
+        /// <summary>Takes decoded pixels as the picture (turning them the way the camera said, if needed).</summary>
+        void SetPixels(PicSurface px, int orientation)
+        {
+            px = Orient(px, orientation);
+            Surface = px;
+            HasAlpha = !px.IsOpaque();
+            Mips = new PicMips();
+            Mips.Build(px);
+            Image = px.Bitmap;
+        }
+
+        static PicSurface Orient(PicSurface px, int o)
+        {
+            RotateFlipType[] steps;
+            switch (o)
+            {
+                case 2: steps = new[] { RotateFlipType.RotateNoneFlipX }; break;
+                case 3: steps = new[] { RotateFlipType.Rotate180FlipNone }; break;
+                case 4: steps = new[] { RotateFlipType.RotateNoneFlipY }; break;
+                case 5: steps = new[] { RotateFlipType.Rotate90FlipNone, RotateFlipType.RotateNoneFlipX }; break;
+                case 6: steps = new[] { RotateFlipType.Rotate90FlipNone }; break;
+                case 7: steps = new[] { RotateFlipType.Rotate270FlipNone, RotateFlipType.RotateNoneFlipX }; break;
+                case 8: steps = new[] { RotateFlipType.Rotate270FlipNone }; break;
+                default: return px;
+            }
+            foreach (var step in steps)
+            {
+                var turned = px.RotateFlip(step);
+                px.Dispose();
+                px = turned;
+            }
+            return px;
         }
 
         public static LoadedImage Load(string source)
@@ -150,7 +191,8 @@ namespace StillsAndReels
                     {
                         using (var ms = new MemoryStream(data))
                         using (var icon = new Icon(ms, 256, 256))
-                            li.Image = icon.ToBitmap();
+                        using (var bmp = icon.ToBitmap())
+                            li.SetPixels(PicSurface.FromImage(bmp), 1);
                     }
                     catch { li.Image = null; }
                 }
@@ -180,23 +222,14 @@ namespace StillsAndReels
                     {
                         int orientation = ReadOrientation(img);
                         if (orientation <= 1) orientation = JpegOrientation(data);
-                        Bitmap bmp;
-                        try
-                        {
-                            bmp = new Bitmap(img.Width, img.Height, PixelFormat.Format32bppArgb);
-                            using (var g = Graphics.FromImage(bmp))
-                            {
-                                g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-                                g.DrawImage(img, new Rectangle(0, 0, img.Width, img.Height));
-                            }
-                        }
+                        PicSurface px;
+                        try { px = PicSurface.FromImage(img); }
                         finally
                         {
                             img.Dispose();
                             ms.Dispose();
                         }
-                        ApplyOrientation(bmp, orientation);
-                        li.Image = bmp;
+                        li.SetPixels(px, orientation);
                     }
                 }
                 return li;
@@ -255,20 +288,6 @@ namespace StillsAndReels
             }
             catch { }
             return 1;
-        }
-
-        static void ApplyOrientation(Image img, int o)
-        {
-            switch (o)
-            {
-                case 2: img.RotateFlip(RotateFlipType.RotateNoneFlipX); break;
-                case 3: img.RotateFlip(RotateFlipType.Rotate180FlipNone); break;
-                case 4: img.RotateFlip(RotateFlipType.RotateNoneFlipY); break;
-                case 5: img.RotateFlip(RotateFlipType.Rotate90FlipX); break;
-                case 6: img.RotateFlip(RotateFlipType.Rotate90FlipNone); break;
-                case 7: img.RotateFlip(RotateFlipType.Rotate270FlipX); break;
-                case 8: img.RotateFlip(RotateFlipType.Rotate270FlipNone); break;
-            }
         }
     }
 }

@@ -815,7 +815,7 @@ namespace StillsAndReels
 
         void StartEditSession()
         {
-            edit = new EditSession(current.Image, current.SourcePath);
+            edit = current.Surface != null ? new EditSession(current.Surface.Clone(), current.SourcePath, false) : new EditSession(current.Image, current.SourcePath);
             edit.Changed += (s, e) => { SyncSidebar(); UpdateUi(); };
             canvas.Edit = edit;
         }
@@ -996,7 +996,8 @@ namespace StillsAndReels
             var old = current;
             current = li;
             shownPath = path;
-            canvas.ShowImage(li.Image, li.IsAnimated);
+            if (li.Surface != null) canvas.ShowSurface(li.Surface, li.Mips, li.HasAlpha);
+            else canvas.ShowImage(li.Image, li.IsAnimated);
             Discard(old); // the previous cached copy is deleted as soon as the new picture is up
             if (mode == AppMode.PictureEdit)
             {
@@ -1309,7 +1310,7 @@ namespace StillsAndReels
             if (!toolSizes.TryGetValue(tool, out size)) size = 4;
             int max = (tool == EditTool.Highlighter || tool == EditTool.Eraser) ? 60 : 30;
             sidebar.SetState(edit != null, tool, Palettes.Colors(pal), c, size, max,
-                edit != null && edit.CanUndo, edit != null && edit.CanRedo, edit != null && edit.Current.Strokes.Length > 0);
+                edit != null && edit.CanUndo, edit != null && edit.CanRedo, edit != null && edit.HasInk);
         }
 
         void ApplyToolToCanvas()
@@ -1786,7 +1787,7 @@ namespace StillsAndReels
             miSplit.Enabled = vedit && !editor.Project.IsEmpty;
             miDelete.Enabled = vedit && editor.HasSelection;
             miCrop.Enabled = miRotL.Enabled = miRotR.Enabled = miFlipH.Enabled = miFlipV.Enabled = pictures && (current != null || edit != null);
-            miClearInk.Enabled = edit != null && edit.Current.Strokes.Length > 0;
+            miClearInk.Enabled = edit != null && edit.HasInk;
             miPictures.Checked = mode == AppMode.Pictures || mode == AppMode.PictureEdit;
             miVideos.Checked = videos;
             miVideoEditor.Checked = vedit;
