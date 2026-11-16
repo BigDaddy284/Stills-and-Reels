@@ -567,7 +567,8 @@ namespace StillsAndReels
             settings.Set("PickUpClicks", pickClicks);
             settings.Set("PickUpFiles", pickFiles);
             settings.Set("PickUpCopied", pickCopied);
-            settings.Set("StatusBar", fullscreen ? prevStatusVisible : statusBar.Visible);
+            // a control inside a hidden window reports itself as not visible: keep the saved choice then
+            settings.Set("StatusBar", fullscreen ? prevStatusVisible : Visible ? statusBar.Visible : settings.GetBool("StatusBar", true));
             settings.Set("Theme", Theme.Current.Name);
             settings.Set("PixelGrid", canvas.ShowPixelGrid);
             settings.Set("AutoplayVideos", autoplay);
