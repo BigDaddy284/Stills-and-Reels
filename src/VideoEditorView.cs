@@ -2477,12 +2477,32 @@ namespace StillsAndReels
                 var rot = Btn(null, Ico.RotateRight, "Rotate 90°", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); var p = cc.PlacementAt(playhead); p.Rotation = Math.Round(p.Rotation / 90) * 90 + 90; if (p.Rotation > 180) p.Rotation -= 360; SetPlacement(cc, p); Changed(); });
                 var reset = Btn(null, Ico.Refresh, "Reset position, size and rotation", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.X = cc.Y = 0; cc.Scale = 1; cc.Rotation = 0; cc.Opacity = 1; cc.Keys.Clear(); propsFor = -2; Changed(); });
                 P(new ButtonRow(flipH, flipV, rot, reset));
+                var fit = Btn("Fit", Ico.None, "Show the whole picture inside the canvas", () => SizeToCanvas(id, false));
+                var fill = Btn("Fill", Ico.None, "Enlarge the picture until it covers the canvas (its edges may be cut off)", () => SizeToCanvas(id, true));
+                P(new ButtonRow(fit, fill));
+                var back = new ThemedToggle { Text = "Blurred background", Checked = c.BackFill == 1 };
+                back.CheckedChanged += (s, e) => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.BackFill = back.Checked ? 1 : 0; Changed(); };
+                P(back);
+                HintP("Fills the empty space around a clip that doesn't match the canvas shape, such as a phone video on a wide canvas.");
 
                 Section("Crop");
                 ClipSlider(c, "Left", 0, 0.45, 0, x => x.CropL, (x, v) => x.CropL = v, Pct);
                 ClipSlider(c, "Right", 0, 0.45, 0, x => x.CropR, (x, v) => x.CropR = v, Pct);
                 ClipSlider(c, "Top", 0, 0.45, 0, x => x.CropT, (x, v) => x.CropT = v, Pct);
                 ClipSlider(c, "Bottom", 0, 0.45, 0, x => x.CropB, (x, v) => x.CropB = v, Pct);
+            }
+            Section("Blending");
+            var blend = Btn(Looks.BlendName(c.Blend), Ico.Layers, "How this clip mixes with the clips under it", () => { });
+            blend.AlignLeft = true;
+            blend.Click += (s, e) => ShowBlendMenu(blend, id);
+            P(blend);
+            if (c.Kind != ClipKind.Text)
+            {
+                Section("Frame");
+                ClipSlider(c, "Rounded corners", 0, 1, 0, x => x.Corner, (x, v) => x.Corner = v, Pct);
+                ClipSlider(c, "Border", 0, 0.3, 0, x => x.BorderWidth, (x, v) => x.BorderWidth = v, Pct);
+                P(ColorRow(c.BorderColor == 0 ? -1 : c.BorderColor, col => { var cc = project.FindClip(id); if (cc != null) cc.BorderColor = col; }));
+                ClipSlider(c, "Shadow", 0, 1, 0, x => x.DropShadow, (x, v) => x.DropShadow = v, Pct);
             }
             Section("Animation");
             ClipSlider(c, "Fade in", 0, Math.Min(5, c.Duration), 0, x => x.FadeIn, (x, v) => x.FadeIn = Math.Min(v, x.Duration), Sec);
@@ -2545,6 +2565,37 @@ namespace StillsAndReels
                 P(pick);
                 ClipSlider(c, "Strength", 0, 100, 30, x => x.KeySimilarity, (x, v) => x.KeySimilarity = v);
                 ClipSlider(c, "Edge softness", 0, 100, 10, x => x.KeySmoothness, (x, v) => x.KeySmoothness = v);
+            }
+            Section("Mask");
+            var mask = new Segmented();
+            mask.Add("0", "None").Add("1", "Box").Add("2", "Oval").Add("3", "Split");
+            mask.Selected = (c.HasMask ? c.MaskKind : 0).ToString(CultureInfo.InvariantCulture);
+            mask.Picked += v =>
+            {
+                var cc = project.FindClip(id); if (cc == null) return;
+                BeginChange(null);
+                cc.MaskKind = int.Parse(v);
+                if (cc.MaskW <= 0.001) cc.MaskW = 0.6;
+                if (cc.MaskH <= 0.001) cc.MaskH = 0.6;
+                if (cc.MaskKind != 0 && cc.MaskFeather <= 0) cc.MaskFeather = 0.1;
+                propsFor = -2; Changed();
+            };
+            P(mask);
+            if (c.HasMask)
+            {
+                if (c.MaskKind != 3)
+                {
+                    ClipSlider(c, "Width", 0.02, 1.5, 0.6, x => x.MaskW > 0.001 ? x.MaskW : 0.6, (x, v) => x.MaskW = v, Pct);
+                    ClipSlider(c, "Height", 0.02, 1.5, 0.6, x => x.MaskH > 0.001 ? x.MaskH : 0.6, (x, v) => x.MaskH = v, Pct);
+                }
+                ClipSlider(c, "Across", -0.6, 0.6, 0, x => x.MaskX, (x, v) => x.MaskX = v, Pct);
+                ClipSlider(c, "Down", -0.6, 0.6, 0, x => x.MaskY, (x, v) => x.MaskY = v, Pct);
+                ClipSlider(c, "Turn", -180, 180, 0, x => x.MaskRotation, (x, v) => x.MaskRotation = v, v => Math.Round(v) + "°");
+                ClipSlider(c, "Soft edge", 0, 1, 0.1, x => x.MaskFeather, (x, v) => x.MaskFeather = v, Pct);
+                if (c.MaskKind == 1) ClipSlider(c, "Rounded corners", 0, 1, 0, x => x.MaskRound, (x, v) => x.MaskRound = v, Pct);
+                var inv = new ThemedToggle { Text = "Show the outside instead", Checked = c.MaskInvert };
+                inv.CheckedChanged += (s, e) => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.MaskInvert = inv.Checked; Changed(); };
+                P(inv);
             }
             if (c.Kind == ClipKind.Video)
             {
@@ -2678,6 +2729,44 @@ namespace StillsAndReels
             sw.ColorPicked += (s, e) => { BeginChange(null); set(e.Color.ToArgb()); Changed(); };
             sw.Height = sw.PreferredHeight;
             return sw;
+        }
+
+        /// <summary>Scale 1 with the clip centred (fit), or the scale at which it covers the whole canvas (fill).</summary>
+        void SizeToCanvas(int clipId, bool fill)
+        {
+            var cc = project.FindClip(clipId);
+            if (cc == null) return;
+            BeginChange(null);
+            var p = cc.PlacementAt(Math.Max(cc.Start, Math.Min(cc.End, playhead)));
+            double scale = 1;
+            if (fill)
+            {
+                var bs = Compositor.BaseSize(cc, Library.Find(cc.MediaId), project.Width, project.Height);
+                scale = Math.Max(project.Width / Math.Max(1.0, bs.Width), project.Height / Math.Max(1.0, bs.Height));
+            }
+            p.X = 0; p.Y = 0; p.Scale = scale; p.Rotation = Math.Round(p.Rotation / 90) * 90;
+            SetPlacement(cc, p);
+            Changed();
+            Say(fill ? "Clip fills the canvas" : "Clip fits inside the canvas");
+        }
+
+        void ShowBlendMenu(Control anchor, int clipId)
+        {
+            var menu = new ContextMenuStrip();
+            var cc0 = project.FindClip(clipId);
+            var ids = new List<string> { "" };
+            ids.AddRange(Looks.BlendIds);
+            foreach (var id in ids)
+            {
+                string bid = id;
+                var mi = new ToolStripMenuItem(Looks.BlendName(bid), null, (s, e) => { var cc = project.FindClip(clipId); if (cc == null) return; BeginChange(null); cc.Blend = bid; propsFor = -2; Changed(); });
+                mi.Checked = cc0 != null && (cc0.Blend ?? "") == bid;
+                menu.Items.Add(mi);
+                if (bid == "") menu.Items.Add(new ToolStripSeparator());
+            }
+            Theme.StyleMenu(menu);
+            menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
+            Ui.ShowMenuBelow(menu, anchor);
         }
 
         void ShowFontMenu(Control anchor, int clipId)

@@ -388,6 +388,18 @@ namespace StillsAndReels
             });
         }
 
+        /// <summary>Blurs an opaque frame in place and dims it (gain below 1).</summary>
+        public static void Soften(Frame f, int radius, double gain)
+        {
+            int w = f.Width, h = f.Height, g = (int)(Math.Max(0, Math.Min(1, gain)) * 256);
+            fixed (byte* p = f.Data)
+            {
+                Blur((IntPtr)p, w, h, w * 4, radius);
+                byte* q = p, end = p + (long)w * h * 4;
+                for (; q < end; q += 4) { q[0] = (byte)((q[0] * g) >> 8); q[1] = (byte)((q[1] * g) >> 8); q[2] = (byte)((q[2] * g) >> 8); q[3] = 255; }
+            }
+        }
+
         /// <summary>True when the clip needs a per-pixel pass before it is drawn.</summary>
         public static bool NeedsPass(Clip c)
         {
@@ -1498,13 +1510,108 @@ namespace StillsAndReels
                 layer.Tx = e[4] - (e[0] * bs.Width + e[2] * bs.Height) / 2.0;
                 layer.Ty = e[5] - (e[1] * bs.Width + e[3] * bs.Height) / 2.0;
                 Snap(layer);
+                layer.Mask = c.Mask();
+                if (c.Corner > 0.002) layer.Shape = new MaskShape { Kind = 1, W = 1, H = 1, Round = Math.Min(1, c.Corner) };
                 if (!cleared)
                 {
                     if (Covers(layer, canvas)) cleared = true;
+                    else if (c.BackFill == 1 && pic.Opaque && opacity >= 0.999 && like == null && layer.Mode == Blend.Normal) { }   // the fill below paints every pixel
                     else EnsureCleared(canvas);
                 }
+                if (c.BackFill == 1 && pic.Opaque && !Covers(layer, canvas))
+                {
+                    DrawBackFill(canvas, pic, layer);
+                    cleared = true;
+                }
+                if (c.DropShadow > 0.002 && !c.HasMask) DrawShadow(canvas, layer, e, bs, c);
                 Raster.Draw(canvas, layer);
+                if (c.BorderWidth > 0.002)
+                {
+                    var rim = BoxLayer(e, -bs.Width / 2, -bs.Height / 2, bs.Width, bs.Height, Solid(Color.FromArgb(c.BorderColor == 0 ? -1 : c.BorderColor)), layer);
+                    rim.Mask = layer.Mask;
+                    rim.Shape = new MaskShape { Kind = 4, W = 1, H = 1, Round = Math.Min(1, c.Corner), Thickness = Math.Min(1, c.BorderWidth) };
+                    Raster.Draw(canvas, rim);
+                }
             }
+        }
+
+        // ---- frames around clips: flat colours stretched over a box and cut to shape by a mask
+
+        static readonly Dictionary<int, Frame> solids = new Dictionary<int, Frame>();
+
+        static Frame Solid(Color col)
+        {
+            int key = col.ToArgb() | unchecked((int)0xFF000000);
+            lock (solids)
+            {
+                Frame f;
+                if (solids.TryGetValue(key, out f)) return f;
+                if (solids.Count > 64) solids.Clear();
+                f = new Frame(16, 16);
+                for (int i = 0; i < 256; i++) { f.Data[i * 4] = col.B; f.Data[i * 4 + 1] = col.G; f.Data[i * 4 + 2] = col.R; f.Data[i * 4 + 3] = 255; }
+                f.Opaque = f.Premultiplied = true;
+                solids[key] = f;
+                return f;
+            }
+        }
+
+        /// <summary>A layer that stretches src over the box (x, y, w, h) of clip space, placed by the matrix elements e.</summary>
+        static Layer BoxLayer(float[] e, double x, double y, double w, double h, Frame src, Layer like)
+        {
+            double kx = w / src.Width, ky = h / src.Height;
+            return new Layer
+            {
+                Src = src, A = e[0] * kx, B = e[1] * kx, C = e[2] * ky, D = e[3] * ky,
+                Tx = e[0] * x + e[2] * y + e[4], Ty = e[1] * x + e[3] * y + e[5],
+                Opacity = like.Opacity, HasClip = like.HasClip, Clip = like.Clip, Alpha = like.Alpha,
+            };
+        }
+
+        void DrawShadow(Frame canvas, Layer layer, float[] e, SizeF bs, Clip c)
+        {
+            double k = Math.Min(1, c.DropShadow);
+            double det = e[0] * e[3] - e[1] * e[2];
+            if (Math.Abs(det) < 1e-9) return;
+            // how far the soft edge reaches (clip space), and the push down and right (canvas pixels, whatever the clip's rotation)
+            double pad = Math.Min(bs.Width, bs.Height) * (0.03 + 0.07 * k);
+            double shift = canvas.Height * 0.012 * (0.5 + k);
+            double sx = (e[3] - e[2]) * shift / det, sy = (e[0] - e[1]) * shift / det;
+            double bw = bs.Width + pad * 2, bh = bs.Height + pad * 2;
+            var sh = BoxLayer(e, -bw / 2 + sx, -bh / 2 + sy, bw, bh, Solid(Color.Black), layer);
+            sh.Opacity = layer.Opacity * (0.35 + 0.45 * k);
+            double small = Math.Min(bs.Width, bs.Height);
+            sh.Shape = new MaskShape { Kind = 1, W = bs.Width / bw, H = bs.Height / bh, Round = Math.Min(1, c.Corner), Feather = 4 * pad / Math.Max(1, small) };
+            Raster.Draw(canvas, sh);
+        }
+
+        /// <summary>Fills the canvas with a soft, dimmed copy of the picture, for clips that don't match the canvas shape.</summary>
+        void DrawBackFill(Frame canvas, Frame pic, Layer layer)
+        {
+            // a small copy is plenty for something this blurred
+            Frame small = pic; bool rented = false;
+            while (small.Width > 320 && small.Height > 8)
+            {
+                int hw = (small.Width + 1) / 2, hh = (small.Height + 1) / 2;
+                var next = new Frame(hw, hh, Raster.Rent((long)hw * hh * 4));
+                Raster.Halve(small, next);
+                if (rented) Raster.Return(small.Data);
+                small = next; rented = true;
+            }
+            if (!rented)
+            {
+                var copy = new Frame(small.Width, small.Height, Raster.Rent((long)small.Width * small.Height * 4));
+                Buffer.BlockCopy(small.Data, 0, copy.Data, 0, small.Width * small.Height * 4);
+                copy.Opaque = copy.Premultiplied = true;
+                small = copy; rented = true;
+            }
+            Pixels.Soften(small, Math.Max(2, small.Width / 28), 0.62);
+            double k = Math.Max((double)canvas.Width / small.Width, (double)canvas.Height / small.Height) * 1.04;
+            Raster.Draw(canvas, new Layer
+            {
+                Src = small, A = k, D = k, Tx = (canvas.Width - small.Width * k) / 2, Ty = (canvas.Height - small.Height * k) / 2,
+                Opacity = layer.Opacity, HasClip = layer.HasClip, Clip = layer.Clip, Alpha = layer.Alpha,
+            });
+            Raster.Return(small.Data);
         }
 
         /// <summary>
@@ -1521,7 +1628,7 @@ namespace StillsAndReels
 
         static bool Covers(Layer l, Frame canvas)
         {
-            return l.Src.Opaque && l.Opacity >= 0.999 && l.Mode == Blend.Normal && l.Alpha == null && l.Mask == null && !l.HasClip &&
+            return l.Src.Opaque && l.Opacity >= 0.999 && l.Mode == Blend.Normal && l.Alpha == null && l.Mask == null && l.Shape == null && !l.HasClip &&
                    l.A == 1 && l.D == 1 && l.B == 0 && l.C == 0 && l.Tx <= 0 && l.Ty <= 0 &&
                    l.Tx + l.Src.Width >= canvas.Width && l.Ty + l.Src.Height >= canvas.Height;
         }

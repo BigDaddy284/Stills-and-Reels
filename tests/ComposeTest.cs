@@ -51,9 +51,10 @@ static class ComposeTest
         return 10 * Math.Log10(255.0 * 255.0 / (se / n));
     }
 
-    static int Main()
+    static int Main(string[] args)
     {
         ImageCache.Initialize();
+        if (args.Length == 2 && args[0] == "dump") { Dump(args[1]); return 0; }
         RasterTests();
         CompositorTests();
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
@@ -334,6 +335,61 @@ static class ComposeTest
         p.Background = unchecked((int)0xFF000000);
         p.Main.Clips.Clear();
 
+        // ---- 3.0 compositing: masks, frames, shadow, blurred background
+        var pic = new Clip { Id = 20, Kind = ClipKind.Image, MediaId = 2, Start = 0, Duration = 4, Scale = 0.5 };
+        p.Main.Clips.Add(pic);
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 81, 46), 60, 200, 20, 3) && Near(Px(f, 160, 90), 60, 200, 20, 3), "a half-size clip has square corners by default " + S(Px(f, 81, 46)));
+        pic.Corner = 1;
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 81, 46), 0, 0, 0, 3) && Near(Px(f, 160, 90), 60, 200, 20, 3) && Near(Px(f, 160, 47), 60, 200, 20, 3), "rounded corners cut the corners off and nothing else " + S(Px(f, 81, 46)));
+        pic.Corner = 0; pic.BorderWidth = 0.2; pic.BorderColor = Color.FromArgb(255, 250, 10, 10).ToArgb();
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 83, 90), 10, 10, 250, 3) && Near(Px(f, 160, 48), 10, 10, 250, 3) && Near(Px(f, 160, 90), 60, 200, 20, 3) && Near(Px(f, 70, 90), 0, 0, 0, 3),
+            "a border runs round the inside of the clip's edge " + S(Px(f, 83, 90)) + S(Px(f, 160, 90)));
+        pic.BorderWidth = 0; pic.DropShadow = 1;
+        p.Background = Color.White.ToArgb();
+        f = Render(p, media, 1, 320, 180);
+        var below = Px(f, 200, 139); var above = Px(f, 120, 40); var far = Px(f, 10, 10);
+        Check(below[0] < 215 && above[0] > below[0] && far[0] == 255 && Near(Px(f, 160, 90), 60, 200, 20, 3), "a shadow falls below and to the right of the clip " + S(below) + S(above));
+        pic.DropShadow = 0;
+        p.Background = unchecked((int)0xFF000000);
+        pic.MaskKind = 2; pic.MaskW = 0.5; pic.MaskH = 0.5; pic.MaskFeather = 0.05;
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 160, 90), 60, 200, 20, 3) && Near(Px(f, 85, 50), 0, 0, 0, 3) && Near(Px(f, 160, 50), 0, 0, 0, 3), "an oval mask shows only the middle of the clip");
+        pic.MaskInvert = true;
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 160, 90), 0, 0, 0, 3) && Near(Px(f, 85, 50), 60, 200, 20, 3), "an inverted mask shows only the outside");
+        pic.MaskKind = 0; pic.MaskInvert = false;
+        // a tall picture on a wide canvas with a blurred background: no black bars left
+        media[4] = Picture(4, 90, 160, (x, y) => Color.FromArgb(255, 200, 60 + y / 2, 40));
+        pic.MediaId = 4; pic.Scale = 1;
+        f = Render(p, media, 1, 320, 180);
+        Check(Near(Px(f, 10, 90), 0, 0, 0, 2) && Px(f, 160, 90)[2] > 190, "a tall clip leaves black bars at the sides");
+        pic.BackFill = 1;
+        f = Render(p, media, 1, 320, 180);
+        var bar = Px(f, 10, 90);
+        Check(bar[2] > 80 && bar[2] < 180 && Px(f, 160, 90)[2] > 190 && Px(f, 310, 5)[2] > 60, "a blurred background fills the bars, dimmer than the clip " + S(bar));
+        p.Main.Clips.Clear();
+
+        // ---- a project saved by 2.6 opens and draws; what 3.0 adds is off in it
+        var old26 = Project.Load("tests/fixtures/project-2.6.srproj");
+        bool plain = true;
+        foreach (var oc26 in old26.AllClips())
+            if (oc26.Blend != "" || oc26.HasMask || oc26.BackFill != 0 || oc26.Corner != 0 || oc26.BorderWidth != 0 || oc26.DropShadow != 0) plain = false;
+        Check(old26.ClipCount == 5 && old26.Width == 1280 && Math.Abs(old26.Fps - 25) < 0.01 && plain, "a 2.6 project loads with every new setting off");
+        var first = old26.Main.Clips[0];
+        Check(first.Keys.Count == 2 && Math.Abs(first.Speed - 1) < 1e-9 && first.Filter == "warm" && Math.Abs(first.Volume - 0.8) < 1e-9 && first.FlipH, "and keeps its own settings");
+        bool drew = true;
+        try { foreach (double t26 in new[] { 0.2, 1.5, 3.9, 4.1, 5.0, 6.9 }) Render(old26, media, t26, 320, 180); } catch (Exception ex) { drew = false; Console.WriteLine(ex); }
+        Check(drew, "and every part of it draws");
+        string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sr-compose-" + Guid.NewGuid().ToString("N") + ".srproj");
+        first.Blend = "screen"; first.MaskKind = 2; first.MaskW = 0.4; first.Corner = 0.3; first.BackFill = 1;
+        old26.Save(tmp);
+        var again = Project.Load(tmp).Main.Clips[0];
+        System.IO.File.Delete(tmp);
+        Check(again.Blend == "screen" && again.MaskKind == 2 && Math.Abs(again.MaskW - 0.4) < 1e-9 && Math.Abs(again.Corner - 0.3) < 1e-9 && again.BackFill == 1 && again.Keys.Count == 2, "new settings survive saving and opening");
+
         // text: drawn, centred, and the same whether it stands still or is animated
         var text = VideoEditorView.TextPreset("title");
         text.Id = 14; text.Start = 0; text.Duration = 4; text.Text = "HELLO"; text.Shadow = false; text.Y = 0;
@@ -357,6 +413,61 @@ static class ComposeTest
         var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < 20; i++) Render(p, media, 1 + i * 0.01, 640, 360, false);
         Console.WriteLine("20 frames of animated text: " + sw.ElapsedMilliseconds + " ms");
+    }
+
+    // ---- pictures to look at: mono ComposeTest.exe dump <folder>
+
+    static readonly List<KeyValuePair<string, Action<Project, Clip, Clip>>> scenes = new List<KeyValuePair<string, Action<Project, Clip, Clip>>>();
+    static void Scene(string name, Action<Project, Clip, Clip> setup) { scenes.Add(new KeyValuePair<string, Action<Project, Clip, Clip>>(name, setup)); }
+
+    /// <summary>Each scene starts with a full-canvas picture (a) and a smaller one over it (b), then changes them.</summary>
+    static void Dump(string dir)
+    {
+        System.IO.Directory.CreateDirectory(dir);
+        var media = new Dictionary<int, MediaItem>();
+        media[1] = Picture(1, 640, 360, (x, y) => Color.FromArgb(255, 30 + x * 180 / 640, 60 + y * 150 / 360, 200 - x * 120 / 640));
+        media[2] = Picture(2, 320, 180, (x, y) => ((x / 20 + y / 20) & 1) == 0 ? Color.FromArgb(255, 250, 200, 40) : Color.FromArgb(255, 230, 90, 30));
+        media[3] = Picture(3, 180, 320, (x, y) => Color.FromArgb(255, 220 - y / 3, 80 + x / 2, 60 + y / 2));
+        DumpScenes();
+        int cols = 4, tw = 320, th = 180, pad = 6, label = 16;
+        int rows = (scenes.Count + cols - 1) / cols;
+        using (var sheet = new Bitmap(cols * (tw + pad) + pad, rows * (th + pad + label) + pad))
+        using (var g = Graphics.FromImage(sheet))
+        using (var font = new Font(FontFamily.GenericSansSerif, 8f))
+        {
+            g.Clear(Color.FromArgb(40, 40, 44));
+            for (int i = 0; i < scenes.Count; i++)
+            {
+                var p = new Project { Width = 640, Height = 360 };
+                var a = new Clip { Id = 1, Kind = ClipKind.Image, MediaId = 1, Start = 0, Duration = 4 };
+                var b = new Clip { Id = 2, Kind = ClipKind.Image, MediaId = 2, Start = 0, Duration = 4, Scale = 0.5 };
+                p.Main.Clips.Add(a);
+                var tr = new Track { Id = 9, Kind = TrackKind.Video }; tr.Clips.Add(b); p.Tracks.Add(tr);
+                scenes[i].Value(p, a, b);
+                var f = Render(p, media, 2, tw, th);
+                int x = pad + (i % cols) * (tw + pad), y = pad + (i / cols) * (th + pad + label);
+                using (var bmp = f.ToBitmap()) g.DrawImageUnscaled(bmp, x, y);
+                g.DrawString(scenes[i].Key, font, Brushes.White, x, y + th + 1);
+            }
+            sheet.Save(System.IO.Path.Combine(dir, "sheet.png"), ImageFormat.Png);
+        }
+        Console.WriteLine(scenes.Count + " scenes written to " + System.IO.Path.Combine(dir, "sheet.png"));
+    }
+
+    static void DumpScenes()
+    {
+        Scene("plain overlay", (p, a, b) => { });
+        Scene("rounded + border + shadow", (p, a, b) => { b.Corner = 0.3; b.BorderWidth = 0.08; b.DropShadow = 0.8; });
+        Scene("turned, shadow", (p, a, b) => { b.Rotation = 15; b.DropShadow = 1; b.Corner = 0.15; });
+        Scene("oval mask, soft", (p, a, b) => { b.MaskKind = 2; b.MaskW = 0.8; b.MaskH = 0.8; b.MaskFeather = 0.4; });
+        Scene("box mask, rounded, turned", (p, a, b) => { b.MaskKind = 1; b.MaskW = 0.7; b.MaskH = 0.5; b.MaskRound = 0.5; b.MaskRotation = 20; b.MaskFeather = 0.02; });
+        Scene("split mask on the main clip", (p, a, b) => { a.MaskKind = 3; a.MaskRotation = 100; a.MaskFeather = 0.3; p.Background = Color.FromArgb(255, 20, 20, 30).ToArgb(); b.Scale = 0.01; });
+        Scene("screen", (p, a, b) => { b.Blend = "screen"; b.Scale = 0.8; });
+        Scene("multiply", (p, a, b) => { b.Blend = "multiply"; b.Scale = 0.8; });
+        Scene("overlay", (p, a, b) => { b.Blend = "overlay"; b.Scale = 0.8; });
+        Scene("difference", (p, a, b) => { b.Blend = "difference"; b.Scale = 0.8; });
+        Scene("tall clip, black bars", (p, a, b) => { a.MediaId = 3; b.Scale = 0.01; });
+        Scene("tall clip, blurred background", (p, a, b) => { a.MediaId = 3; a.BackFill = 1; b.Scale = 0.01; });
     }
 
     /// <summary>Bounding box of everything brighter than the black background.</summary>

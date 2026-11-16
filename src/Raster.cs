@@ -96,12 +96,13 @@ namespace StillsAndReels
     /// <summary>A soft-edged shape in a clip's own space that limits where the clip shows.</summary>
     internal sealed class MaskShape
     {
-        public int Kind;            // 1 rectangle, 2 ellipse, 3 split (a straight edge)
+        public int Kind;            // 1 rectangle, 2 ellipse, 3 split (a straight edge), 4 frame (the rim of a rectangle)
         public double X, Y;         // centre, as a fraction of the picture (0 = middle, ±0.5 = edges)
         public double W = 0.6, H = 0.6; // size as a fraction of the picture
         public double Rotation;     // degrees
-        public double Feather;      // 0..1, as a fraction of the smaller side
-        public double Round;        // rectangle corner rounding 0..1
+        public double Feather;      // width of the soft edge, as a fraction of half the shape's smaller side
+        public double Round;        // rectangle corner rounding 0..1 (1 = half the smaller side)
+        public double Thickness;    // frame only: rim width, as a fraction of half the smaller side
         public bool Invert;
     }
 
@@ -117,6 +118,7 @@ namespace StillsAndReels
         public Rectangle Clip;      // canvas pixels
         public RowAlpha Alpha;      // optional canvas-space alpha
         public MaskShape Mask;      // optional clip-space mask
+        public MaskShape Shape;     // a second clip-space mask (rounded corners, frames), combined with Mask
         public bool Sharp;          // high-quality resampling (export, paused preview)
 
         /// <summary>The same layer drawing a different (smaller) copy of its picture.</summary>
@@ -375,7 +377,7 @@ namespace StillsAndReels
             int n = bx1 - bx0;
             if (n <= 0 || by1 <= by0) return;
             var sd = src.Data; var dd = dst.Data;
-            bool plain = src.Opaque && op >= 256 && l.Mode == Blend.Normal && l.Alpha == null && l.Mask == null;
+            bool plain = src.Opaque && op >= 256 && l.Mode == Blend.Normal && l.Alpha == null && l.Mask == null && l.Shape == null;
             var inv = Inverse(l);
             Rows(by0, by1, (long)n * (by1 - by0), (ya, yb) =>
             {
@@ -394,39 +396,56 @@ namespace StillsAndReels
             });
         }
 
-        struct Inv { public double A, B, C, D, Tx, Ty; public int W, H; }
+        struct Inv { public double A, B, C, D, Tx, Ty, Su, Sv; public int W, H; }
 
         static Inv Inverse(Layer l)
         {
             double det = l.A * l.D - l.B * l.C;
             if (Math.Abs(det) < 1e-12) det = 1e-12;
-            return new Inv { A = l.D / det, B = -l.B / det, C = -l.C / det, D = l.A / det, Tx = l.Tx, Ty = l.Ty, W = l.Src.Width, H = l.Src.Height };
+            return new Inv
+            {
+                A = l.D / det, B = -l.B / det, C = -l.C / det, D = l.A / det, Tx = l.Tx, Ty = l.Ty, W = l.Src.Width, H = l.Src.Height,
+                Su = Math.Sqrt(l.A * l.A + l.B * l.B), Sv = Math.Sqrt(l.C * l.C + l.D * l.D),
+            };
         }
 
-        /// <summary>Canvas-space alpha and the clip's mask for one row; null when the layer has neither.</summary>
+        /// <summary>Canvas-space alpha and the clip's masks for one row; null when the layer has none.</summary>
         static byte* FillAlpha(Layer l, Inv inv, int y, int x, int n, byte* buf)
         {
-            if (l.Alpha == null && l.Mask == null) return null;
+            if (l.Alpha == null && l.Mask == null && l.Shape == null) return null;
             if (l.Alpha != null) l.Alpha(y, x, n, buf);
             else for (int i = 0; i < n; i++) buf[i] = 255;
             if (l.Mask != null) MaskRow(l.Mask, inv, y, x, n, buf);
+            if (l.Shape != null) MaskRow(l.Shape, inv, y, x, n, buf);
             return buf;
+        }
+
+        static double BoxDistance(double rx, double ry, double hw, double hh, double round)
+        {
+            double qx = Math.Abs(rx) - hw + round, qy = Math.Abs(ry) - hh + round;
+            double ox = Math.Max(qx, 0), oy = Math.Max(qy, 0);
+            return Math.Sqrt(ox * ox + oy * oy) + Math.Min(Math.Max(qx, qy), 0) - round;
         }
 
         static void MaskRow(MaskShape m, Inv inv, int y, int x, int n, byte* buf)
         {
-            // picture-space position of each canvas pixel, as a fraction of the picture from its middle
+            // Each canvas pixel's place in the picture, measured from its middle in units of the picture's height
+            // as it appears on the canvas, so shapes keep their proportions whatever the picture's.
             double py = y + 0.5 - inv.Ty;
             double w = inv.W, h = inv.H;
-            double aspect = w / Math.Max(1.0, h);
+            double shownH = Math.Max(1e-6, inv.Sv * h);
+            double aspect = Math.Max(1e-6, inv.Su * w) / shownH;
             double rot = -m.Rotation * Math.PI / 180, cs = Math.Cos(rot), sn = Math.Sin(rot);
-            double hw = Math.Max(0.001, m.W / 2), hh = Math.Max(0.001, m.H / 2);
-            // work in units of the picture's height so shapes aren't squashed by the aspect ratio
-            double hwU = hw * aspect, hhU = hh;
-            double feather = Math.Max(0.0005, m.Feather * 0.5 * Math.Min(hwU, hhU) * 2);
-            double round = Math.Max(0, Math.Min(1, m.Round)) * Math.Min(hwU, hhU);
+            double hwU = Math.Max(0.001, m.W / 2) * aspect, hhU = Math.Max(0.001, m.H / 2);
+            double small = Math.Min(hwU, hhU);
+            // never sharper than one canvas pixel, so hard edges are still smooth
+            double feather = Math.Max(m.Feather * small, 1.0 / shownH);
+            double round = Math.Max(0, Math.Min(1, m.Round)) * small;
+            double thick = m.Thickness * small;
+            bool hard = m.Feather * small <= 1.0 / shownH;
             for (int i = 0; i < n; i++)
             {
+                if (buf[i] == 0) continue;
                 double px = x + i + 0.5 - inv.Tx;
                 double u = inv.A * px + inv.C * py, v = inv.B * px + inv.D * py;
                 double fx = (u / w - 0.5 - m.X) * aspect, fy = v / h - 0.5 - m.Y;
@@ -435,17 +454,20 @@ namespace StillsAndReels
                 if (m.Kind == 2)
                 {
                     double k = Math.Sqrt(rx * rx / (hwU * hwU) + ry * ry / (hhU * hhU));
-                    dist = (k - 1) * Math.Min(hwU, hhU);
+                    dist = (k - 1) * small;
                 }
                 else if (m.Kind == 3) dist = ry;
                 else
                 {
-                    double qx = Math.Abs(rx) - hwU + round, qy = Math.Abs(ry) - hhU + round;
-                    double ox = Math.Max(qx, 0), oy = Math.Max(qy, 0);
-                    dist = Math.Sqrt(ox * ox + oy * oy) + Math.Min(Math.Max(qx, qy), 0) - round;
+                    dist = BoxDistance(rx, ry, hwU, hhU, round);
+                    if (m.Kind == 4)
+                    {
+                        double inner = BoxDistance(rx, ry, Math.Max(0.0005, hwU - thick), Math.Max(0.0005, hhU - thick), Math.Max(0, round - thick));
+                        dist = Math.Max(dist, -inner);
+                    }
                 }
                 double a = 0.5 - dist / feather;
-                if (a < 0) a = 0; else if (a > 1) a = 1;
+                if (a <= 0) a = 0; else if (a >= 1) a = 1; else if (!hard) a = a * a * (3 - 2 * a);
                 if (m.Invert) a = 1 - a;
                 buf[i] = (byte)(buf[i] * a + 0.5);
             }
@@ -579,10 +601,10 @@ namespace StillsAndReels
                                 o[3] = (byte)(((a[3] * ifx + a[7] * fx) * ify + (c[3] * ifx + c[7] * fx) * fy + 32768) >> 16);
                             }
                             soft |= SlowSpan(s0, sw, sh, inv, py, su, sv, ib, xb - ib, row + (long)(ib - xa) * 4, al + (ib - xa));
-                            if (soft || l.Alpha != null || l.Mask != null) for (int i = ia - xa; i < ib - xa; i++) al[i] = 255;
+                            if (soft || l.Alpha != null || l.Mask != null || l.Shape != null) for (int i = ia - xa; i < ib - xa; i++) al[i] = 255;
                         }
                         byte* alpha = null;
-                        if (l.Alpha != null || l.Mask != null)
+                        if (l.Alpha != null || l.Mask != null || l.Shape != null)
                         {
                             // combine the edge coverage with the layer's own alpha
                             FillAlpha(l, inv, y, xa, n, t);

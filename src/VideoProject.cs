@@ -60,6 +60,16 @@ namespace StillsAndReels
         // New in 3.0. A project saved by 2.6 has none of these, and a missing value reads as 0, false or null,
         // so every one of them must mean "as before" when it is empty.
         [DataMember] public string Blend = "";                 // how the clip mixes with what is under it ("" = normal)
+        [DataMember] public int MaskKind;                      // 0 none, 1 box, 2 oval, 3 split
+        [DataMember] public double MaskX, MaskY;               // centre, fraction of the picture from its middle
+        [DataMember] public double MaskW, MaskH;               // size, fraction of the picture (0 reads as 0.6)
+        [DataMember] public double MaskRotation, MaskFeather, MaskRound;
+        [DataMember] public bool MaskInvert;
+        [DataMember] public int BackFill;                      // 1 = a blurred copy of the clip fills the canvas behind it
+        [DataMember] public double Corner;                     // rounded corners, 0..1
+        [DataMember] public double BorderWidth;                // 0..1 of half the shorter side
+        [DataMember] public int BorderColor;                   // 0 reads as white
+        [DataMember] public double DropShadow;                 // 0..1
 
         // ---- sound
         [DataMember] public double Volume = 1;
@@ -177,6 +187,19 @@ namespace StillsAndReels
                        Math.Abs(Exposure) > 0.01 || Math.Abs(Temperature) > 0.01 || Math.Abs(Tint) > 0.01 || Math.Abs(Hue) > 0.01 ||
                        (!string.IsNullOrEmpty(Filter) && FilterAmount > 0.001);
             }
+        }
+
+        public bool HasMask { get { return MaskKind >= 1 && MaskKind <= 3; } }
+
+        /// <summary>The clip's mask as the renderer wants it, or null.</summary>
+        public MaskShape Mask()
+        {
+            if (!HasMask) return null;
+            return new MaskShape
+            {
+                Kind = MaskKind, X = MaskX, Y = MaskY, W = MaskW > 0.001 ? MaskW : 0.6, H = MaskH > 0.001 ? MaskH : 0.6,
+                Rotation = MaskRotation, Feather = Math.Max(0, MaskFeather), Round = MaskRound, Invert = MaskInvert,
+            };
         }
 
         public bool HasCrop { get { return CropL > 0.0005 || CropT > 0.0005 || CropR > 0.0005 || CropB > 0.0005; } }
