@@ -92,7 +92,7 @@ The biggest release so far: both editors were rebuilt for speed and given severa
 ### Known limits in 3.0
 
 - A reversed clip of a video with transparency loses the transparency, and a video with an uneven frame rate is reversed at a steady one.
-- Graphics-card encoding, HEIC photos from a phone and the recovery prompt could only be checked on Windows by hand (see the Windows checks that come with the build).
+- The engine tests were run on a real Windows PC as well as on Linux (377 checks, with the bundled FFmpeg 7.1 and an NVIDIA card: 20 seconds of 1080p exported as HEVC in 6.9 s on the card against 17.0 s on a 10-core processor). The Intel and AMD encoders, HEIC photos from a phone and the recovery prompt still need a check by hand (see the Windows checks that come with the build).
 - In picture Edit, selections aren't part of undo, and Straighten turns shapes and text into pixels. Camera raw files, SVG, JPEG XL and animated WebP aren't opened.
 - There are still no automatic captions, and Stabilise applies in playback and export only.
 
