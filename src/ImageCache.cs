@@ -131,6 +131,8 @@ namespace StillsAndReels
         public PicMips Mips;
         public bool HasAlpha;
         public bool IsAnimated;
+        /// <summary>A layered picture (.srpic): CachePath holds the layers for the editor.</summary>
+        public bool IsProject;
         public long FileSize;
         MemoryStream stream; // kept open only for animated GIFs (GDI+ reads frames lazily)
 
@@ -184,6 +186,21 @@ namespace StillsAndReels
                 byte[] data = File.ReadAllBytes(cache);
                 var li = new LoadedImage { SourcePath = source, CachePath = cache, FileSize = data.LongLength };
                 string ext = Path.GetExtension(source).ToLowerInvariant();
+
+                if (PicProject.IsProject(source))
+                {
+                    // a layered picture: shown as one flat picture; the editor opens its layers from the cached copy
+                    var state = PicProject.Load(cache);
+                    try { li.SetPixels(PicCompositor.Flatten(state), 1); }
+                    finally { foreach (var l in state.Layers) if (l.Pixels != null) l.Pixels.Dispose(); }
+                    li.IsProject = true;
+                    return li;
+                }
+                if (FileTypes.NeedsFfmpeg(source))
+                {
+                    li.SetPixels(PicCodecs.Decode(cache), 1);
+                    return li;
+                }
 
                 if (ext == ".ico")
                 {

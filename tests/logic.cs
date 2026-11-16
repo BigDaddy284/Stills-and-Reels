@@ -9,7 +9,10 @@ class T {
     var st=asm.GetType("StillsAndReels.Stroke"); var tool=asm.GetType("StillsAndReels.EditTool"); var saver=asm.GetType("StillsAndReels.ImageSaver");
     S(cache,"Initialize");
     Check(S(ft,"Classify","a.JPG").ToString()=="Image","jpg is image");
-    Check(S(ft,"Classify","a.heic").ToString()=="Incompatible","heic incompatible");
+    Check(S(ft,"Classify","a.heic").ToString()=="Image","heic is read through FFmpeg");
+    Check(S(ft,"Classify","a.webp").ToString()=="Image","webp is image");
+    Check(S(ft,"Classify","a.srpic").ToString()=="Image","layered picture is image");
+    Check(S(ft,"Classify","a.cr2").ToString()=="Incompatible","camera raw incompatible");
     Check(S(ft,"Classify","a.txt").ToString()=="Other","txt ignored");
     var img = S(li,"Load","/tmp/pp/rotated_exif.jpg");
     var image=(Image)li.GetField("Image").GetValue(img); string cp=(string)li.GetField("CachePath").GetValue(img);
