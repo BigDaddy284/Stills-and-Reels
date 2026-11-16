@@ -280,6 +280,7 @@ namespace StillsAndReels
         {
             Normalize();
             version++;
+            Library.WarmSound(project);
             RefreshAll();
             if (IsPlaying) { restartTimer.Stop(); restartTimer.Start(); }
         }
@@ -488,7 +489,7 @@ namespace StillsAndReels
             if (project.IsEmpty) { Say("Add something to the timeline first"); return; }
             if (playhead >= project.Duration - 0.04) playhead = 0;
             string waiting;
-            if (!Library.AudioReady(project, out waiting)) Say("The sound of " + waiting + " is still being prepared – it plays silently until it's ready");
+            if (!Library.AudioReady(project, out waiting, true)) Say("The sound of " + waiting + " is still being prepared – it plays silently until it's ready");
             StartPlayback();
         }
 
@@ -548,9 +549,25 @@ namespace StillsAndReels
             try { BeginInvoke(a); } catch { }
         }
 
+        int soundCheck;
+
+        /// <summary>The loudness of the mix being heard, for the meter beside the transport (0 when paused).</summary>
+        public void PlaybackLevels(out float left, out float right)
+        {
+            left = right = 0;
+            var pb = playback;
+            if (pb != null) pb.Levels(out left, out right);
+        }
+
         void OnPlayTick()
         {
             if (playback == null) return;
+            // a clip whose cleaned-up or speed-changed sound wasn't ready plays silently: bring it in once it is
+            if (playback.SoundMissing && ++soundCheck % 20 == 0)
+            {
+                string waiting;
+                if (Library.AudioReady(project, out waiting, true)) { restartTimer.Stop(); restartTimer.Start(); }
+            }
             playhead = playback.Position;
             Timeline.Follow(playhead);
             bar.Invalidate();
@@ -1070,6 +1087,15 @@ namespace StillsAndReels
                 var mb = mid.Clone(); mb.T = 0; bKeys.Insert(0, mb);
                 c.Keys = aKeys; b.Keys = bKeys;
             }
+            if (c.HasLevels)
+            {
+                double v = c.VolumeAt(local);
+                var aL = c.Levels.Where(k => k.T < local - 1e-6).Select(k => new LevelKey { T = k.T, V = k.V }).ToList();
+                aL.Add(new LevelKey { T = local, V = v });
+                var bL = c.Levels.Where(k => k.T > local + 1e-6).Select(k => new LevelKey { T = k.T - local, V = k.V }).ToList();
+                bL.Insert(0, new LevelKey { T = 0, V = v });
+                c.Levels = aL; b.Levels = bL;
+            }
             track.Clips.Add(b);
             return b;
         }
@@ -1243,7 +1269,7 @@ namespace StillsAndReels
             {
                 tries++;
                 if (m.Status == MediaStatus.Ready && m.Info != null) { timer.Stop(); timer.Dispose(); then(); }
-                else if (tries > 150 || m.Status == MediaStatus.Failed) { timer.Stop(); timer.Dispose(); Say("Couldn't prepare the picture"); }
+                else if (tries > 400 || m.Status == MediaStatus.Failed) { timer.Stop(); timer.Dispose(); Say("Couldn't prepare " + (m.Kind == MediaKind.Image ? "the picture" : "the file")); }
             };
             timer.Start();
         }
@@ -1287,6 +1313,9 @@ namespace StillsAndReels
             {
                 Id = project.NewId(), Kind = ClipKind.Audio, MediaId = c.MediaId, Start = c.Start, Duration = c.Duration, In = c.In, Speed = c.Speed,
                 Volume = c.Volume, AudioFadeIn = c.AudioFadeIn, AudioFadeOut = c.AudioFadeOut,
+                Denoise = c.Denoise, VoiceBoost = c.VoiceBoost, Bass = c.Bass, Treble = c.Treble, Pitch = c.Pitch,
+                EvenLoudness = c.EvenLoudness, Duck = c.Duck, DuckAmount = c.DuckAmount,
+                Levels = c.Levels.Select(k => new LevelKey { T = k.T, V = k.V }).ToList(),
             };
             FreeTrack(TrackKind.Audio, a.Start, a.End).Clips.Add(a);
             c.Muted = true;
@@ -1432,6 +1461,134 @@ namespace StillsAndReels
             Changed();
         }
 
+        /// <summary>Adds or removes a volume keyframe at the playhead on the selected clip.</summary>
+        public void ToggleLevelKey()
+        {
+            var c = SingleSelected;
+            if (c == null || (c.Kind != ClipKind.Video && c.Kind != ClipKind.Audio)) return;
+            if (playhead < c.Start - 1e-6 || playhead > c.End + 1e-6) { Say("Move the playhead over the clip to add a volume keyframe"); return; }
+            BeginChange(null);
+            var k = c.LevelAt(playhead, project.FrameDuration * 0.5);
+            if (k != null)
+            {
+                c.Levels.Remove(k);
+                if (c.Levels.Count == 0) { c.Volume = k.V; Say("Volume keyframes removed – the volume is the same all the way through again"); }
+                else Say("Volume keyframe removed");
+            }
+            else
+            {
+                double lt = Math.Max(0, Math.Min(c.Duration, project.Snap(playhead) - c.Start));
+                c.Levels.Add(new LevelKey { T = lt, V = c.VolumeAt(lt) });
+                c.Levels.Sort((x, y) => x.T.CompareTo(y.T));
+                Say(c.Levels.Count == 1 ? "Volume keyframe added – move the playhead and change Volume to make it rise or fall" : "Volume keyframe added");
+            }
+            propsFor = -2;
+            Changed();
+        }
+
+        /// <summary>Cuts away what lies before (start) or after the playhead on the selected clips, or the clip under it.</summary>
+        public void TrimToPlayhead(bool start)
+        {
+            double fd = project.FrameDuration;
+            double t = project.Snap(playhead);
+            var targets = TargetsAtPlayhead().Where(c => !project.TrackOf(c).Locked && t > c.Start + fd * 0.5 && t < c.End - fd * 0.5).ToList();
+            if (targets.Count == 0) { Say("Put the playhead inside a clip to trim it there"); return; }
+            StopPlayback();
+            BeginChange(null);
+            foreach (var c in targets)
+            {
+                if (start)
+                {
+                    double delta = t - c.Start;
+                    if (c.HasKeys) { var p = c.PlacementAt(t); if (c.KeyAt(t, 1e-6) == null) { c.Keys.Add(new Keyframe { T = delta, X = p.X, Y = p.Y, Scale = p.Scale, Rotation = p.Rotation, Opacity = p.Opacity }); c.SortKeys(); } }
+                    if (c.HasLevels && c.LevelAt(t, 1e-6) == null) { c.Levels.Add(new LevelKey { T = delta, V = c.VolumeAt(delta) }); c.Levels.Sort((x, y) => x.T.CompareTo(y.T)); }
+                    c.Keys.RemoveAll(k => k.T < delta - 1e-6);
+                    c.Levels.RemoveAll(k => k.T < delta - 1e-6);
+                    c.ShiftKeys(-delta);
+                    if (c.Kind == ClipKind.Video || c.Kind == ClipKind.Audio) c.In += delta * c.Speed;
+                    c.Start = t;
+                    c.Duration -= delta;
+                    c.FadeIn = Math.Min(c.FadeIn, c.Duration); c.AudioFadeIn = Math.Min(c.AudioFadeIn, c.Duration);
+                }
+                else
+                {
+                    double len = t - c.Start;
+                    if (c.HasKeys) { var p = c.PlacementAt(t); if (c.KeyAt(t, 1e-6) == null) { c.Keys.Add(new Keyframe { T = len, X = p.X, Y = p.Y, Scale = p.Scale, Rotation = p.Rotation, Opacity = p.Opacity }); c.SortKeys(); } }
+                    if (c.HasLevels && c.LevelAt(t, 1e-6) == null) { c.Levels.Add(new LevelKey { T = len, V = c.VolumeAt(len) }); c.Levels.Sort((x, y) => x.T.CompareTo(y.T)); }
+                    c.Keys.RemoveAll(k => k.T > len + 1e-6);
+                    c.Levels.RemoveAll(k => k.T > len + 1e-6);
+                    c.Duration = len;
+                    c.FadeOut = Math.Min(c.FadeOut, c.Duration); c.AudioFadeOut = Math.Min(c.AudioFadeOut, c.Duration);
+                }
+            }
+            Changed();
+            // with the main track closing gaps, a trimmed start pulls the clip back: keep the playhead on the cut
+            if (start && targets.Count > 0) { var f = targets[0]; if (Math.Abs(f.Start - t) > 1e-6) Scrub(f.Start); }
+            Say(start ? "Trimmed the start to the playhead" : "Trimmed the end to the playhead");
+        }
+
+        bool reversing;
+
+        /// <summary>Replaces the selected clip with a backwards copy of the part of the file it shows.</summary>
+        public void ReverseSelected()
+        {
+            var c = SingleSelected;
+            if (c == null || (c.Kind != ClipKind.Video && c.Kind != ClipKind.Audio)) { Say("Select a video or sound clip to play it backwards"); return; }
+            var m = Library.Find(c.MediaId);
+            if (m == null || !m.IsUsable) return;
+            if (reversing) { Say("A clip is already being reversed – one at a time"); return; }
+            if (m.HasAudio && !m.PcmFailed && m.PcmPath == null) { Say("The sound of this clip is still being prepared – try again in a moment"); return; }
+            StopPlayback();
+            int id = c.Id, mediaId = m.Id;
+            double from = c.In, speed = c.Speed;
+            double span = c.Duration * c.Speed;
+            if (m.Duration > 0) span = Math.Min(span, Math.Max(0.05, m.Duration - from));
+            bool soundOnly = c.Kind == ClipKind.Audio;
+            reversing = true;
+            Say("Reversing…");
+            int shown = -1;
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                string path = null, error = null;
+                try
+                {
+                    path = Reverser.Make(m, from, span, soundOnly, f =>
+                    {
+                        int pct = (int)(f * 100) / 5 * 5;
+                        if (pct == shown) return;
+                        shown = pct;
+                        Post(() => { if (reversing) Say("Reversing… " + pct + "%"); });
+                    }, () => IsDisposed || m.Removed);
+                }
+                catch (OperationCanceledException) { error = "stopped"; }
+                catch (Exception ex) { error = ex.Message; }
+                Post(() =>
+                {
+                    reversing = false;
+                    if (path == null) { Say("Couldn't reverse the clip: " + error); return; }
+                    var rm = Library.Add(path, 0, true);
+                    WaitReady(rm, () =>
+                    {
+                        var cc = project.FindClip(id);
+                        if (cc == null || cc.MediaId != mediaId || Math.Abs(cc.In - from) > 1e-6 || Math.Abs(cc.Speed - speed) > 1e-6)
+                        {
+                            Say("The clip changed while it was being reversed – the backwards copy is in the media panel");
+                            return;
+                        }
+                        StopPlayback();
+                        BeginChange(null);
+                        EnsureRef(rm);
+                        cc.MediaId = rm.Id;
+                        cc.In = 0;
+                        if (rm.Duration > 0) cc.Duration = Math.Max(project.FrameDuration, Math.Min(cc.Duration, rm.Duration / cc.Speed));
+                        cc.Stabilize = false;
+                        Changed();
+                        Say("Clip reversed");
+                    });
+                });
+            });
+        }
+
         void JumpKey(int dir)
         {
             var c = SingleSelected;
@@ -1457,21 +1614,19 @@ namespace StillsAndReels
 
         public void SetSpeed(Clip c, double s)
         {
-            s = Math.Max(0.1, Math.Min(10, s));
+            s = Math.Max(0.1, Math.Min(16, s));
             double old = c.Speed;
             if (Math.Abs(old - s) < 1e-6) return;
             double srcSpan = c.Duration * old;
             c.Speed = s;
             c.Duration = Math.Max(project.FrameDuration, srcSpan / s);
-            foreach (var k in c.Keys) k.T *= old / s;
+            c.ScaleKeys(old / s);
             var tr = project.TrackOf(c);
             if (tr != null && !(mainMagnet && ReferenceEquals(tr, project.Main)))
             {
                 double next = tr.Clips.Where(o => !ReferenceEquals(o, c) && o.Start >= c.Start + 1e-6).Select(o => o.Start).DefaultIfEmpty(double.MaxValue).Min();
                 if (c.End > next) c.Duration = next - c.Start;
             }
-            var m = Library.Find(c.MediaId);
-            if (m != null && m.HasAudio) { var mm = m; double ss = s; ThreadPool.QueueUserWorkItem(_ => MediaLibrary.PcmFor(mm, ss)); }
         }
 
         public Clip ClipAtCanvas(PointF pt)
@@ -1854,6 +2009,8 @@ namespace StillsAndReels
             bool locked = project.TrackOf(c) != null && project.TrackOf(c).Locked;
             bool under = playhead > c.Start + 1e-3 && playhead < c.End - 1e-3;
             menu.Items.Add(new ToolStripMenuItem("Split at the playhead", null, (s, e) => SplitSelected()) { ShortcutKeyDisplayString = "Ctrl+B", Enabled = under && !locked });
+            menu.Items.Add(new ToolStripMenuItem("Trim the start to the playhead", null, (s, e) => TrimToPlayhead(true)) { ShortcutKeyDisplayString = "Q", Enabled = under && !locked });
+            menu.Items.Add(new ToolStripMenuItem("Trim the end to the playhead", null, (s, e) => TrimToPlayhead(false)) { ShortcutKeyDisplayString = "W", Enabled = under && !locked });
             menu.Items.Add(new ToolStripMenuItem("Duplicate", null, (s, e) => DuplicateSelected()) { ShortcutKeyDisplayString = "Ctrl+D" });
             menu.Items.Add(new ToolStripMenuItem("Copy", null, (s, e) => CopySelected(false)) { ShortcutKeyDisplayString = "Ctrl+C" });
             menu.Items.Add(new ToolStripMenuItem("Cut", null, (s, e) => CopySelected(true)) { ShortcutKeyDisplayString = "Ctrl+X", Enabled = !locked });
@@ -1864,26 +2021,17 @@ namespace StillsAndReels
                 var m = Library.Find(c.MediaId);
                 menu.Items.Add(new ToolStripMenuItem("Detach audio", null, (s, e) => DetachAudio()) { Enabled = m != null && m.HasAudio && !c.Muted && !locked });
             }
-            if (c.Kind != ClipKind.Audio && c.Kind != ClipKind.Text || c.Kind == ClipKind.Video)
+            if (c.Kind == ClipKind.Video || c.Kind == ClipKind.Audio)
             {
                 var speed = new ToolStripMenuItem("Speed");
-                foreach (var sp in new[] { 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4 })
+                foreach (var sp in new[] { 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 8, 16 })
                 {
                     double v = sp;
                     speed.DropDownItems.Add(new ToolStripMenuItem(v.ToString("0.##", CultureInfo.InvariantCulture) + "×", null, (s, e) => { BeginChange(null); SetSpeed(c, v); Changed(); })
                     { Checked = Math.Abs(c.Speed - v) < 0.001 });
                 }
-                if (c.Kind == ClipKind.Video) menu.Items.Add(speed);
-            }
-            if (c.Kind == ClipKind.Audio)
-            {
-                var speed = new ToolStripMenuItem("Speed");
-                foreach (var sp in new[] { 0.5, 0.75, 1, 1.25, 1.5, 2 })
-                {
-                    double v = sp;
-                    speed.DropDownItems.Add(new ToolStripMenuItem(v.ToString("0.##", CultureInfo.InvariantCulture) + "×", null, (s, e) => { BeginChange(null); SetSpeed(c, v); Changed(); }) { Checked = Math.Abs(c.Speed - v) < 0.001 });
-                }
                 menu.Items.Add(speed);
+                menu.Items.Add(new ToolStripMenuItem("Play backwards", null, (s, e) => { Select(c, false); ReverseSelected(); }) { Enabled = !locked });
             }
             if (c.Kind != ClipKind.Text)
                 menu.Items.Add(new ToolStripMenuItem(c.Muted ? "Turn sound on" : "Mute clip", null, (s, e) => { BeginChange(null); c.Muted = !c.Muted; Changed(); }) { Enabled = c.Kind != ClipKind.Image });
@@ -1942,6 +2090,9 @@ namespace StillsAndReels
                 case Keys.Back: DeleteSelected(false); return true;
                 case Keys.Shift | Keys.Delete: DeleteSelected(true); return true;
                 case Keys.Control | Keys.B: SplitSelected(); return true;
+                case Keys.S: SplitSelected(); return true;
+                case Keys.Q: TrimToPlayhead(true); return true;
+                case Keys.W: TrimToPlayhead(false); return true;
                 case Keys.Control | Keys.D: DuplicateSelected(); return true;
                 case Keys.Control | Keys.C: CopySelected(false); return true;
                 case Keys.Control | Keys.X: CopySelected(true); return true;
@@ -2322,8 +2473,8 @@ namespace StillsAndReels
                 s.Sync();
                 if (s.Keyable && c != null)
                 {
-                    s.KeyAnimated = c.HasKeys;
-                    s.KeyActive = c.KeyAt(playhead, project.FrameDuration * 0.5) != null;
+                    s.KeyAnimated = s.LevelKeys ? c.HasLevels : c.HasKeys;
+                    s.KeyActive = s.LevelKeys ? c.LevelAt(playhead, project.FrameDuration * 0.5) != null : c.KeyAt(playhead, project.FrameDuration * 0.5) != null;
                     s.Invalidate();
                 }
             }
@@ -2743,33 +2894,102 @@ namespace StillsAndReels
             var mute = new ThemedToggle { Text = "Mute this clip", Checked = c.Muted };
             mute.CheckedChanged += (s, e) => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); cc.Muted = mute.Checked; Changed(); };
             P(mute);
-            ClipSlider(c, "Volume", 0, 2, 1, x => x.Volume, (x, v) => x.Volume = v, Pct);
+
+            // volume: one value, or a line through volume keyframes once the diamond has been used
+            var vol = new PropSlider("Volume", 0, 4, 1) { Format = Pct, Keyable = true, LevelKeys = true };
+            vol.Getter = () => { var cc = project.FindClip(id); return cc != null ? cc.VolumeAt(Math.Max(0, Math.Min(cc.Duration, playhead - cc.Start))) : 1; };
+            vol.SetSilently(vol.Getter());
+            vol.Changing += v =>
+            {
+                var cc = project.FindClip(id);
+                if (cc == null) return;
+                BeginChange("p:Volume" + id);
+                if (!cc.HasLevels) cc.Volume = v;
+                else
+                {
+                    if (playhead < cc.Start - 1e-6 || playhead > cc.End + 1e-6) { Say("Move the playhead over the clip to change its volume there"); return; }
+                    var k = cc.LevelAt(playhead, project.FrameDuration * 0.5);
+                    if (k == null)
+                    {
+                        k = new LevelKey { T = Math.Max(0, Math.Min(cc.Duration, project.Snap(playhead) - cc.Start)) };
+                        cc.Levels.Add(k);
+                        cc.Levels.Sort((x, y) => x.T.CompareTo(y.T));
+                    }
+                    k.V = v;
+                }
+                LiveChanged();
+            };
+            vol.Committed += () => Changed();
+            vol.KeyClicked += ToggleLevelKey;
+            vol.KeyAnimated = c.HasLevels;
+            vol.KeyActive = c.LevelAt(playhead, project.FrameDuration * 0.5) != null;
+            liveSliders.Add(vol);
+            P(vol);
+            if (c.HasLevels) HintP("The volume follows its keyframes (the diamonds on the clip). Move the playhead and drag Volume to add another.");
             ClipSlider(c, "Fade in", 0, Math.Min(10, c.Duration), 0, x => x.AudioFadeIn, (x, v) => x.AudioFadeIn = Math.Min(v, x.Duration), Sec);
             ClipSlider(c, "Fade out", 0, Math.Min(10, c.Duration), 0, x => x.AudioFadeOut, (x, v) => x.AudioFadeOut = Math.Min(v, x.Duration), Sec);
+
+            Section("Clean up");
+            ClipSlider(c, "Noise reduction", 0, 100, 0, x => x.Denoise, (x, v) => x.Denoise = v < 1 ? 0 : v);
+            var voice = new ThemedToggle { Text = "Voice boost (clearer speech)", Checked = c.VoiceBoost };
+            voice.CheckedChanged += (s, e) => SetClip(id, x => x.VoiceBoost = voice.Checked, false);
+            P(voice);
+            var even = new ThemedToggle { Text = "Even out the loudness", Checked = c.EvenLoudness };
+            even.CheckedChanged += (s, e) => SetClip(id, x => x.EvenLoudness = even.Checked, false);
+            P(even);
+
+            Section("Tone");
+            ClipSlider(c, "Bass", -100, 100, 0, x => x.Bass, (x, v) => x.Bass = v, Signed);
+            ClipSlider(c, "Treble", -100, 100, 0, x => x.Treble, (x, v) => x.Treble = v, Signed);
+            ClipSlider(c, "Pitch", -12, 12, 0, x => x.Pitch, (x, v) => x.Pitch = Math.Round(v * 2) / 2,
+                v => Math.Abs(v) < 0.01 ? "0" : (v > 0 ? "+" : "") + v.ToString("0.#", CultureInfo.InvariantCulture) + " st");
+
+            Section("Mixing");
+            var duck = new ThemedToggle { Text = "Turn down under other sound", Checked = c.Duck };
+            duck.CheckedChanged += (s, e) => SetClip(id, x => x.Duck = duck.Checked, true);
+            P(duck);
+            if (c.Duck)
+            {
+                ClipSlider(c, "How far down", 0.1, 1, 0.75, x => x.DuckDepth, (x, v) => x.DuckAmount = v, Pct);
+                HintP("For music under speech: this clip drops while any other clip is sounding and comes back in the gaps.");
+            }
             if (c.Kind == ClipKind.Video)
                 P(new ButtonRow(Btn("Detach audio", Ico.Detach, "Move the sound to its own track", DetachAudio)));
             if (m != null && m.PcmFailed) HintP("The sound of this file couldn't be read.");
+            else if (c.Denoise > 0.5 || Math.Abs(c.Pitch) > 0.01 || c.EvenLoudness)
+                HintP("Noise reduction, pitch and even loudness are prepared in the background after each change; the clip is silent in the preview for a moment while that happens.");
+        }
+
+        static double SpeedStep(double v)
+        {
+            double step = v < 2 ? 0.05 : v < 4 ? 0.1 : v < 8 ? 0.25 : 0.5;
+            return Math.Max(0.1, Math.Min(16, Math.Round(v / step) * step));
         }
 
         void BuildSpeedProps(Clip c)
         {
             int id = c.Id;
             Section("Speed");
-            var s = new PropSlider("Speed", 0.25, 4, 1) { Format = v => v.ToString("0.00", CultureInfo.InvariantCulture) + "×" };
-            s.Getter = () => { var cc = project.FindClip(id); return cc != null ? cc.Speed : 1; };
-            s.SetSilently(c.Speed);
-            s.Changing += v => { var cc = project.FindClip(id); if (cc == null) return; BeginChange("speed" + id); SetSpeed(cc, Math.Round(v * 20) / 20); LiveChanged(); };
+            // the slider moves in doublings, so slow motion gets as much room as fast motion
+            var s = new PropSlider("Speed", Math.Log(0.1, 2), 4, 0) { Format = v => SpeedStep(Math.Pow(2, v)).ToString("0.##", CultureInfo.InvariantCulture) + "×" };
+            s.Getter = () => { var cc = project.FindClip(id); return cc != null ? Math.Log(cc.Speed, 2) : 0; };
+            s.SetSilently(Math.Log(c.Speed, 2));
+            s.Changing += v => { var cc = project.FindClip(id); if (cc == null) return; BeginChange("speed" + id); SetSpeed(cc, SpeedStep(Math.Pow(2, v))); LiveChanged(); };
             s.Committed += () => Changed();
             liveSliders.Add(s);
             P(s);
             Func<double, ThemedButton> preset = v =>
             {
-                var b = Btn(v.ToString("0.##", CultureInfo.InvariantCulture) + "×", Ico.None, "Play at " + v + "× speed", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); SetSpeed(cc, v); Changed(); });
+                var b = Btn(v.ToString("0.##", CultureInfo.InvariantCulture) + "×", Ico.None, "Play at " + v.ToString("0.##", CultureInfo.InvariantCulture) + "× speed", () => { var cc = project.FindClip(id); if (cc == null) return; BeginChange(null); SetSpeed(cc, v); Changed(); });
                 b.Checked = Math.Abs(c.Speed - v) < 0.001;
                 return b;
             };
-            P(new ButtonRow(preset(0.5), preset(1), preset(1.5), preset(2)));
-            HintP("Slower clips get longer and faster ones shorter. The sound keeps its pitch. Speeds below 0.5× or above 2× play the picture only if the sound gets too stretched.");
+            P(new ButtonRow(preset(0.25), preset(0.5), preset(1), preset(1.5)));
+            P(new ButtonRow(preset(2), preset(4), preset(8), preset(16)));
+            HintP("Slower clips get longer and faster ones shorter (0.1× to 16×). The sound keeps its pitch.");
+            Section("Direction");
+            P(new ButtonRow(Btn("Play backwards", Ico.Undo, "Reverse this clip: the part on the timeline is written out backwards, picture and sound", ReverseSelected)));
+            HintP("Reversing makes a backwards copy of just this part of the file, so it takes a moment for long clips. The original isn't touched.");
         }
 
         void BuildTextProps(Clip c)

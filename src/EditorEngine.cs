@@ -13,7 +13,70 @@ namespace StillsAndReels
 {
     // =========================================================================== audio mixing
 
-    /// <summary>Mixes every sounding clip of a project from the cached PCM files (48 kHz stereo).</summary>
+    /// <summary>One second-order filter (RBJ cookbook forms) with its own state for the left and right channel.</summary>
+    internal sealed class Biquad
+    {
+        double b0, b1, b2, a1, a2;
+        double l1, l2, r1, r2;
+
+        Biquad(double b0, double b1, double b2, double a0, double a1, double a2)
+        {
+            this.b0 = b0 / a0; this.b1 = b1 / a0; this.b2 = b2 / a0; this.a1 = a1 / a0; this.a2 = a2 / a0;
+        }
+
+        public static Biquad LowShelf(double hz, double db) { return Shelf(hz, db, false); }
+        public static Biquad HighShelf(double hz, double db) { return Shelf(hz, db, true); }
+
+        static Biquad Shelf(double hz, double db, bool high)
+        {
+            double A = Math.Pow(10, db / 40), w = 2 * Math.PI * hz / AudioMixer.Rate, cs = Math.Cos(w), sn = Math.Sin(w);
+            double al = sn / 2 * Math.Sqrt(2), q = 2 * Math.Sqrt(A) * al;   // slope 1
+            if (!high)
+                return new Biquad(A * ((A + 1) - (A - 1) * cs + q), 2 * A * ((A - 1) - (A + 1) * cs), A * ((A + 1) - (A - 1) * cs - q),
+                                  (A + 1) + (A - 1) * cs + q, -2 * ((A - 1) + (A + 1) * cs), (A + 1) + (A - 1) * cs - q);
+            return new Biquad(A * ((A + 1) + (A - 1) * cs + q), -2 * A * ((A - 1) + (A + 1) * cs), A * ((A + 1) + (A - 1) * cs - q),
+                              (A + 1) - (A - 1) * cs + q, 2 * ((A - 1) - (A + 1) * cs), (A + 1) - (A - 1) * cs - q);
+        }
+
+        public static Biquad Peak(double hz, double db, double q)
+        {
+            double A = Math.Pow(10, db / 40), w = 2 * Math.PI * hz / AudioMixer.Rate, cs = Math.Cos(w), al = Math.Sin(w) / (2 * q);
+            return new Biquad(1 + al * A, -2 * cs, 1 - al * A, 1 + al / A, -2 * cs, 1 - al / A);
+        }
+
+        public static Biquad HighPass(double hz)
+        {
+            double w = 2 * Math.PI * hz / AudioMixer.Rate, cs = Math.Cos(w), al = Math.Sin(w) / Math.Sqrt(2);
+            return new Biquad((1 + cs) / 2, -(1 + cs), (1 + cs) / 2, 1 + al, -2 * cs, 1 - al);
+        }
+
+        public void Reset() { l1 = l2 = r1 = r2 = 0; }
+
+        /// <summary>Filters interleaved stereo in place.</summary>
+        public void Run(float[] buf, int frames)
+        {
+            double x1 = l1, x2 = l2, y1 = r1, y2 = r2;
+            for (int i = 0; i < frames; i++)
+            {
+                double x = buf[i * 2], o = b0 * x + x1;
+                x1 = b1 * x - a1 * o + x2; x2 = b2 * x - a2 * o;
+                buf[i * 2] = (float)o;
+                x = buf[i * 2 + 1]; o = b0 * x + y1;
+                y1 = b1 * x - a1 * o + y2; y2 = b2 * x - a2 * o;
+                buf[i * 2 + 1] = (float)o;
+            }
+            // denormals would make the filter crawl once the sound stops
+            l1 = Math.Abs(x1) < 1e-20 ? 0 : x1; l2 = Math.Abs(x2) < 1e-20 ? 0 : x2;
+            r1 = Math.Abs(y1) < 1e-20 ? 0 : y1; r2 = Math.Abs(y2) < 1e-20 ? 0 : y2;
+        }
+    }
+
+    /// <summary>
+    /// Mixes every sounding clip of a project from the cached PCM files (48 kHz stereo). Volume (and its keyframes),
+    /// fades, bass, treble, voice boost and ducking are worked out here as the sound is mixed, so changing them is
+    /// instant; noise reduction, pitch and even loudness come from files prepared by MediaLibrary.
+    /// Call Mix with rising positions: filters carry their state from one call to the next, and start afresh after a jump.
+    /// </summary>
     internal sealed class AudioMixer : IDisposable
     {
         public const int Rate = 48000;
@@ -22,15 +85,34 @@ namespace StillsAndReels
         {
             public long Start, End, SrcOffset, FadeIn, FadeOut;
             public double Gain;
+            public long[] KeyAt; public double[] KeyGain;   // volume keyframes (frames into the clip), or null
+            public Biquad[] Filters;                          // bass, treble and the voice boost's tone, or null
+            public bool Compress;                             // the voice boost's compressor
+            public double CompEnv;
+            public bool Duck; public double DuckDepth;
+            public long Next = long.MinValue;                 // the position the next call continues from
             public FileStream Fs;
             public long FileFrames;
         }
 
         readonly List<Src> sources = new List<Src>();
         byte[] readBuf = new byte[0];
+        float[] work = new float[0];
+        float[] duckEnv = new float[0];
+        bool anyDuck;
+        double duckGain; int duckHold; long duckNext = long.MinValue;
 
-        /// <summary>Builds the mix. May decode tempo-changed sound first, so call it off the UI thread.</summary>
-        public AudioMixer(Project p, Func<int, MediaItem> media, Func<bool> cancelled = null)
+        /// <summary>How many clips are silent because their prepared sound wasn't ready (only when not waiting).</summary>
+        public int Missing;
+
+        /// <summary>The loudest sample of each channel in the last Mix call (before the preview's own volume), 0..1 and beyond.</summary>
+        public float PeakL, PeakR;
+
+        /// <summary>
+        /// Builds the mix. With wait, speed-changed or cleaned-up sound that isn't ready yet is made first (export),
+        /// so call it off the UI thread; without, such clips stay silent and their sound is started in the background (playback).
+        /// </summary>
+        public AudioMixer(Project p, Func<int, MediaItem> media, Func<bool> cancelled = null, bool wait = true)
         {
             foreach (var tr in p.Tracks)
             {
@@ -38,15 +120,16 @@ namespace StillsAndReels
                 foreach (var c in tr.Clips)
                 {
                     if (cancelled != null && cancelled()) return;
-                    if ((c.Kind != ClipKind.Video && c.Kind != ClipKind.Audio) || c.Muted || c.Volume <= 0.0001) continue;
+                    if ((c.Kind != ClipKind.Video && c.Kind != ClipKind.Audio) || !c.Sounds) continue;
                     var m = media(c.MediaId);
                     if (m == null || !m.IsUsable || !m.HasAudio) continue;
-                    string pcm = MediaLibrary.PcmFor(m, c.Speed);
-                    if (pcm == null) continue;
+                    string chain = c.SoundChain();
+                    string pcm = wait ? MediaLibrary.PcmFor(m, c.Speed, chain) : MediaLibrary.PcmIfReady(m, c.Speed, chain, true);
+                    if (pcm == null) { Missing++; continue; }
                     try
                     {
                         var fs = new FileStream(pcm, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
-                        sources.Add(new Src
+                        var s = new Src
                         {
                             Start = (long)Math.Round(c.Start * Rate),
                             End = (long)Math.Round(c.End * Rate),
@@ -54,59 +137,144 @@ namespace StillsAndReels
                             FadeIn = (long)Math.Round(c.AudioFadeIn * Rate),
                             FadeOut = (long)Math.Round(c.AudioFadeOut * Rate),
                             Gain = c.Volume,
+                            Duck = c.Duck, DuckDepth = c.DuckDepth,
                             Fs = fs,
                             FileFrames = fs.Length / 4,
-                        });
+                        };
+                        if (c.HasLevels)
+                        {
+                            s.KeyAt = new long[c.Levels.Count]; s.KeyGain = new double[c.Levels.Count];
+                            for (int i = 0; i < c.Levels.Count; i++) { s.KeyAt[i] = (long)Math.Round(c.Levels[i].T * Rate); s.KeyGain[i] = Math.Max(0, c.Levels[i].V); }
+                        }
+                        var f = new List<Biquad>();
+                        if (c.VoiceBoost) { f.Add(Biquad.HighPass(90)); f.Add(Biquad.Peak(250, -2.5, 1)); f.Add(Biquad.Peak(3200, 4.5, 0.9)); s.Compress = true; }
+                        if (Math.Abs(c.Bass) > 0.5) f.Add(Biquad.LowShelf(120, Math.Max(-100, Math.Min(100, c.Bass)) * 0.12));
+                        if (Math.Abs(c.Treble) > 0.5) f.Add(Biquad.HighShelf(4500, Math.Max(-100, Math.Min(100, c.Treble)) * 0.12));
+                        if (f.Count > 0) s.Filters = f.ToArray();
+                        if (s.Duck) anyDuck = true;
+                        sources.Add(s);
                     }
                     catch { }
                 }
             }
+            // ducking needs something to duck under
+            if (anyDuck && !sources.Exists(x => !x.Duck)) anyDuck = false;
         }
 
         public bool HasSound { get { return sources.Count > 0; } }
 
-        /// <summary>Adds frames [pos, pos+frames) into buf (interleaved stereo, ±1.0).</summary>
+        static double KeyGainAt(Src s, long local)
+        {
+            var at = s.KeyAt;
+            if (local <= at[0]) return s.KeyGain[0];
+            int n = at.Length;
+            if (local >= at[n - 1]) return s.KeyGain[n - 1];
+            int i = 1;
+            while (at[i] < local) i++;
+            double u = (double)(local - at[i - 1]) / Math.Max(1, at[i] - at[i - 1]);
+            return s.KeyGain[i - 1] + (s.KeyGain[i] - s.KeyGain[i - 1]) * u;
+        }
+
+        /// <summary>Reads, shapes and adds one source into buf. With env, the source is turned down by its ducking depth times env.</summary>
+        void Add(Src s, long pos, int frames, float[] buf, float[] env)
+        {
+            long endPos = pos + frames;
+            long a = Math.Max(pos, s.Start), b = Math.Min(endPos, s.End);
+            if (b <= a) return;
+            long srcFrame = s.SrcOffset + (a - s.Start);
+            int count = (int)(b - a);
+            if (srcFrame >= s.FileFrames) return;
+            int avail = (int)Math.Min(count, s.FileFrames - srcFrame);
+            if (readBuf.Length < avail * 4) readBuf = new byte[avail * 4];
+            int got = 0;
+            try
+            {
+                s.Fs.Position = srcFrame * 4;
+                while (got < avail * 4)
+                {
+                    int n = s.Fs.Read(readBuf, got, avail * 4 - got);
+                    if (n <= 0) break;
+                    got += n;
+                }
+            }
+            catch { return; }
+            int gotFrames = got / 4;
+            if (gotFrames == 0) return;
+            if (work.Length < gotFrames * 2) work = new float[gotFrames * 2];
+            var w = work;
+            for (int i = 0; i < gotFrames; i++)
+            {
+                w[i * 2] = (short)(readBuf[i * 4] | (readBuf[i * 4 + 1] << 8)) / 32768f;
+                w[i * 2 + 1] = (short)(readBuf[i * 4 + 2] | (readBuf[i * 4 + 3] << 8)) / 32768f;
+            }
+            bool fresh = s.Next != a;
+            s.Next = a + gotFrames;
+            if (s.Filters != null)
+                foreach (var f in s.Filters) { if (fresh) f.Reset(); f.Run(w, gotFrames); }
+            if (s.Compress)
+            {
+                // speech sits around a steady level: peaks above -20 dB are eased to a third, then the whole is lifted
+                const double threshold = 0.1, attack = 1 - 0.99740, release = 1 - 0.99986, makeup = 1.7;   // 8 ms, 150 ms, +4.6 dB
+                double e = fresh ? 0 : s.CompEnv;
+                for (int i = 0; i < gotFrames; i++)
+                {
+                    double l = w[i * 2], r = w[i * 2 + 1], level = Math.Max(Math.Abs(l), Math.Abs(r));
+                    e += (level - e) * (level > e ? attack : release);
+                    double g = e > threshold ? Math.Pow(e / threshold, -2.0 / 3) : 1;
+                    w[i * 2] = (float)(l * g * makeup); w[i * 2 + 1] = (float)(r * g * makeup);
+                }
+                s.CompEnv = e < 1e-20 ? 0 : e;
+            }
+            long clipLen = s.End - s.Start;
+            int at = (int)(a - pos);
+            for (int i = 0; i < gotFrames; i++)
+            {
+                long local = a - s.Start + i;
+                double gain = s.KeyAt != null ? KeyGainAt(s, local) : s.Gain;
+                if (s.FadeIn > 0 && local < s.FadeIn) gain *= (double)local / s.FadeIn;
+                long fromEnd = clipLen - local;
+                if (s.FadeOut > 0 && fromEnd < s.FadeOut) gain *= Math.Max(0, (double)fromEnd / s.FadeOut);
+                if (env != null) gain *= 1 - s.DuckDepth * env[at + i];
+                int o = (at + i) * 2;
+                buf[o] += (float)(w[i * 2] * gain);
+                buf[o + 1] += (float)(w[i * 2 + 1] * gain);
+            }
+        }
+
+        /// <summary>Writes frames [pos, pos+frames) into buf (interleaved stereo, ±1.0).</summary>
         public void Mix(long pos, int frames, float[] buf)
         {
             Array.Clear(buf, 0, frames * 2);
-            long endPos = pos + frames;
-            foreach (var s in sources)
+            foreach (var s in sources) if (!s.Duck || !anyDuck) Add(s, pos, frames, buf, null);
+            if (anyDuck)
             {
-                long a = Math.Max(pos, s.Start), b = Math.Min(endPos, s.End);
-                if (b <= a) continue;
-                long srcFrame = s.SrcOffset + (a - s.Start);
-                int count = (int)(b - a);
-                if (srcFrame >= s.FileFrames) continue;
-                int avail = (int)Math.Min(count, s.FileFrames - srcFrame);
-                if (readBuf.Length < avail * 4) readBuf = new byte[avail * 4];
-                int got = 0;
-                try
+                // How far ducked clips go down, 0..1, from the loudness of everything else: down quickly when
+                // something sounds, held through the short gaps between words, and back up slowly afterwards.
+                if (duckEnv.Length < frames) duckEnv = new float[frames];
+                const double threshold = 0.012, down = 1 - 0.99965, up = 1 - 0.99996;   // -38 dB; 60 ms; 500 ms
+                const int hold = Rate * 35 / 100;
+                bool fresh = duckNext != pos;
+                double g = duckGain; int h = duckHold;
+                for (int i = 0; i < frames; i++)
                 {
-                    s.Fs.Position = srcFrame * 4;
-                    while (got < avail * 4)
-                    {
-                        int n = s.Fs.Read(readBuf, got, avail * 4 - got);
-                        if (n <= 0) break;
-                        got += n;
-                    }
+                    bool loud = Math.Abs(buf[i * 2]) > threshold || Math.Abs(buf[i * 2 + 1]) > threshold;
+                    if (fresh) { g = loud ? 1 : 0; h = 0; fresh = false; }
+                    if (loud) h = hold; else if (h > 0) h--;
+                    double target = h > 0 ? 1 : 0;
+                    g += (target - g) * (target > g ? down : up);
+                    duckEnv[i] = (float)g;
                 }
-                catch { continue; }
-                int gotFrames = got / 4;
-                long clipLen = s.End - s.Start;
-                for (int i = 0; i < gotFrames; i++)
-                {
-                    long local = a - s.Start + i;
-                    double gain = s.Gain;
-                    if (s.FadeIn > 0 && local < s.FadeIn) gain *= (double)local / s.FadeIn;
-                    long fromEnd = clipLen - local;
-                    if (s.FadeOut > 0 && fromEnd < s.FadeOut) gain *= Math.Max(0, (double)fromEnd / s.FadeOut);
-                    int o = (int)(a - pos + i) * 2;
-                    int l = (short)(readBuf[i * 4] | (readBuf[i * 4 + 1] << 8));
-                    int r = (short)(readBuf[i * 4 + 2] | (readBuf[i * 4 + 3] << 8));
-                    buf[o] += (float)(l * gain / 32768.0);
-                    buf[o + 1] += (float)(r * gain / 32768.0);
-                }
+                duckGain = g < 1e-9 ? 0 : g; duckHold = h; duckNext = pos + frames;
+                foreach (var s in sources) if (s.Duck) Add(s, pos, frames, buf, duckEnv);
             }
+            float pl = 0, pr = 0;
+            for (int i = 0; i < frames; i++)
+            {
+                float l = Math.Abs(buf[i * 2]), r = Math.Abs(buf[i * 2 + 1]);
+                if (l > pl) pl = l;
+                if (r > pr) pr = r;
+            }
+            PeakL = pl; PeakR = pr;
         }
 
         public static void ToPcm16(float[] buf, int frames, float volume, byte[] dest)
@@ -209,6 +377,29 @@ namespace StillsAndReels
             }
         }
 
+        /// <summary>Some clips are silent because their prepared sound wasn't ready when playback started.</summary>
+        public volatile bool SoundMissing;
+
+        struct Level { public long Until; public float L, R; }
+        readonly Queue<Level> levels = new Queue<Level>();   // sound is handed to the device ahead of being heard
+
+        /// <summary>The loudness of the mix at the moment being heard (per channel, 1 = full scale; the preview's own volume isn't counted), for the meter.</summary>
+        public void Levels(out float left, out float right)
+        {
+            left = right = 0;
+            var w = wave;
+            if (!audioClock || w == null) return;
+            long played;
+            try { played = w.PlayedFrames; } catch { return; }
+            lock (levels)
+            {
+                while (levels.Count > 1 && levels.Peek().Until <= played) levels.Dequeue();
+                if (levels.Count == 0) return;
+                var l = levels.Peek();
+                left = l.L; right = l.R;
+            }
+        }
+
         public void Start()
         {
             new Thread(VideoLoop) { IsBackground = true, Name = "editor video" }.Start();
@@ -274,13 +465,15 @@ namespace StillsAndReels
         {
             try
             {
-                mixer = new AudioMixer(project, Media, () => cancelled);
+                mixer = new AudioMixer(project, Media, () => cancelled, false);
+                SoundMissing = mixer.Missing > 0;
                 if (cancelled || !mixer.HasSound) return;
                 try { wave = new WaveOut(8, 2400); }
                 catch { wave = null; return; } // no sound device: the stopwatch keeps time
                 firstFrame.WaitOne();
                 if (cancelled) return;
                 long pos = (long)Math.Round(start * AudioMixer.Rate);
+                long startFrame = pos;
                 long end = (long)Math.Ceiling(duration * AudioMixer.Rate);
                 var w = wave;
                 var mix = new float[w.BufferBytes / 2];
@@ -293,6 +486,11 @@ namespace StillsAndReels
                     if (idx < 0) { Thread.Sleep(5); continue; }
                     int n = (int)Math.Min(framesPer, end - pos);
                     mixer.Mix(pos, n, mix);
+                    lock (levels)
+                    {
+                        levels.Enqueue(new Level { Until = pos + n - startFrame, L = mixer.PeakL, R = mixer.PeakR });
+                        while (levels.Count > 64) levels.Dequeue();
+                    }
                     AudioMixer.ToPcm16(mix, n, volume(), bytes);
                     w.Write(idx, bytes, n * 4);
                     if (first) { first = false; audioClock = true; }

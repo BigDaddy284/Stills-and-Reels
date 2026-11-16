@@ -29,6 +29,7 @@ namespace StillsAndReels
         double dragOffsetT;
         double origStart, origDuration, origIn;
         List<Keyframe> origKeys;
+        List<LevelKey> origLevels;
         Row ghostRow;
         double ghostStart;
         double snapLine = double.NaN;
@@ -363,6 +364,8 @@ namespace StillsAndReels
             origStart = c.Start; origDuration = c.Duration; origIn = c.In;
             origKeys = new List<Keyframe>();
             foreach (var k in c.Keys) origKeys.Add(k.Clone());
+            origLevels = new List<LevelKey>();
+            foreach (var k in c.Levels) origLevels.Add(new LevelKey { T = k.T, V = k.V });
             dragOffsetT = X2T(e.X) - c.Start;
             if (edge == Edge.Left || edge == Edge.Right)
             {
@@ -499,6 +502,8 @@ namespace StillsAndReels
                 c.In = Math.Max(0, origIn + delta * c.Speed);
                 c.Keys.Clear();
                 foreach (var k in origKeys) { var nk = k.Clone(); nk.T -= delta; c.Keys.Add(nk); }
+                c.Levels.Clear();
+                foreach (var k in origLevels) c.Levels.Add(new LevelKey { T = k.T - delta, V = k.V });
             }
             else
             {
@@ -1016,12 +1021,14 @@ namespace StillsAndReels
             float mid = r.Top + r.Height / 2;
             float half = r.Height * 0.46f;
             int x0 = (int)Math.Max(r.Left, ClipLeft), x1 = (int)Math.Min(r.Right, Width);
+            bool levels = c.HasLevels;
             float gain = (float)Math.Min(2, c.Volume);
             using (var pen = new Pen(col, 1f))
             {
                 for (int x = x0; x < x1; x++)
                 {
                     double ta = c.Start + (x - r.Left) / pps, tb = ta + 1 / pps;
+                    if (levels) gain = (float)Math.Min(2, c.VolumeAt(ta - c.Start));
                     int ia = (int)(c.SourceTime(ta) * 100), ib = (int)Math.Ceiling(c.SourceTime(tb) * 100);
                     float v = 0;
                     for (int i = Math.Max(0, ia); i <= ib && i < peaks.Length; i++) v = Math.Max(v, peaks[i]);
@@ -1029,6 +1036,19 @@ namespace StillsAndReels
                     if (v < 0.01f) continue;
                     g.DrawLine(pen, x, mid - v * half, x, mid + v * half);
                 }
+            }
+            if (!levels) return;
+            // the volume line: the top of the strip is 200%, the bottom silence
+            Func<LevelKey, PointF> at = k => new PointF((float)(r.Left + k.T * pps), r.Bottom - 2 - (r.Height - 4) * (float)Math.Min(1, k.V / 2));
+            using (var pen = new Pen(Color.FromArgb(235, 255, 210, 80), Theme.F(1.4f)))
+            using (var dot = new SolidBrush(Color.FromArgb(255, 255, 210, 80)))
+            {
+                var first = at(c.Levels[0]); var last = at(c.Levels[c.Levels.Count - 1]);
+                g.DrawLine(pen, r.Left, first.Y, first.X, first.Y);
+                for (int i = 1; i < c.Levels.Count; i++) g.DrawLine(pen, at(c.Levels[i - 1]), at(c.Levels[i]));
+                g.DrawLine(pen, last.X, last.Y, r.Right, last.Y);
+                float s = Theme.F(3.2f);
+                foreach (var k in c.Levels) { var pt = at(k); g.FillEllipse(dot, pt.X - s, pt.Y - s, s * 2, s * 2); }
             }
         }
     }

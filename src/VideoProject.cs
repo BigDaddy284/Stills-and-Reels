@@ -87,6 +87,15 @@ namespace StillsAndReels
         [DataMember] public double Volume = 1;
         [DataMember] public bool Muted;
         [DataMember] public double AudioFadeIn, AudioFadeOut;
+        // New in 3.0 (see the note above: empty must mean "as before").
+        [DataMember] public double Denoise;                    // noise reduction, 0..100
+        [DataMember] public bool VoiceBoost;                   // clearer speech: rumble cut, presence lift, gentle compression
+        [DataMember] public double Bass, Treble;               // -100..100 (±12 dB)
+        [DataMember] public double Pitch;                      // semitones, -12..12
+        [DataMember] public bool EvenLoudness;                 // brought to one steady loudness
+        [DataMember] public bool Duck;                         // turned down while other clips are sounding (music under speech)
+        [DataMember] public double DuckAmount;                 // how far down, 0..1; 0 reads as 0.75
+        [DataMember] public List<LevelKey> Levels = new List<LevelKey>(); // volume keyframes; when there are any they replace Volume
 
         // ---- text
         [DataMember] public string Text = "";
@@ -112,6 +121,8 @@ namespace StillsAndReels
             var c = (Clip)MemberwiseClone();
             c.Keys = new List<Keyframe>();
             if (Keys != null) foreach (var k in Keys) c.Keys.Add(k.Clone());
+            c.Levels = new List<LevelKey>();
+            if (Levels != null) foreach (var k in Levels) c.Levels.Add(new LevelKey { T = k.T, V = k.V });
             return c;
         }
 
@@ -119,6 +130,7 @@ namespace StillsAndReels
         void Fix(StreamingContext ctx)
         {
             if (Keys == null) Keys = new List<Keyframe>();
+            if (Levels == null) Levels = new List<LevelKey>();
             if (Filter == null) Filter = "";
             if (Transition == null) Transition = "";
             if (Blend == null) Blend = "";
@@ -285,6 +297,83 @@ namespace StillsAndReels
 
         public void SortKeys() { Keys.Sort((a, b) => a.T.CompareTo(b.T)); }
 
+        // ---- sound
+
+        public bool HasLevels { get { return Levels != null && Levels.Count > 0; } }
+        public double DuckDepth { get { return DuckAmount > 0.001 ? Math.Min(1, DuckAmount) : 0.75; } }
+
+        /// <summary>Volume at lt seconds into the clip: the slider's value, or the line through the volume keyframes.</summary>
+        public double VolumeAt(double lt)
+        {
+            if (!HasLevels) return Volume;
+            LevelKey a = null, b = null;
+            foreach (var k in Levels)
+            {
+                if (k.T <= lt + 1e-9) a = k;
+                else { b = k; break; }
+            }
+            if (a == null) return Levels[0].V;
+            if (b == null) return a.V;
+            double u = (lt - a.T) / Math.Max(1e-6, b.T - a.T);
+            return a.V + (b.V - a.V) * Math.Max(0, Math.Min(1, u));
+        }
+
+        public LevelKey LevelAt(double t, double tolerance)
+        {
+            double lt = t - Start;
+            foreach (var k in Levels) if (Math.Abs(k.T - lt) <= tolerance) return k;
+            return null;
+        }
+
+        /// <summary>True when any volume this clip reaches is above silence.</summary>
+        public bool Sounds
+        {
+            get
+            {
+                if (Muted) return false;
+                if (!HasLevels) return Volume > 0.0001;
+                foreach (var k in Levels) if (k.V > 0.0001) return true;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// The slow part of the clip's sound work, as an FFmpeg filter chain run over the whole file once and kept
+        /// ("" when there is none). Bass, treble, voice boost, volume and ducking are done live by the mixer.
+        /// </summary>
+        public string SoundChain()
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var parts = new List<string>();
+            if (Denoise > 0.5)
+            {
+                double d = Math.Min(100, Denoise);
+                parts.Add("highpass=f=70");
+                parts.Add("afftdn=nr=" + (6 + d * 0.24).ToString("0.#", inv) + ":nf=" + (-50 + d * 0.25).ToString("0.#", inv));
+            }
+            if (Math.Abs(Pitch) > 0.01)
+            {
+                int rate = (int)Math.Round(48000 * Math.Pow(2, Math.Max(-12, Math.Min(12, Pitch)) / 12.0));
+                parts.Add("asetrate=" + rate + ",aresample=48000," + MediaLibrary.Tempo(48000.0 / rate));
+            }
+            if (EvenLoudness) parts.Add("loudnorm=I=-16:TP=-1.5:LRA=11");
+            return string.Join(",", parts);
+        }
+
+        /// <summary>Moves every keyframe (picture and volume) by delta seconds, e.g. when the clip's start is trimmed.</summary>
+        public void ShiftKeys(double delta)
+        {
+            foreach (var k in Keys) k.T += delta;
+            foreach (var k in Levels) k.T += delta;
+        }
+
+        /// <summary>Stretches keyframe times, e.g. when the clip's speed changes.</summary>
+        public void ScaleKeys(double factor)
+        {
+            foreach (var k in Keys) k.T *= factor;
+            foreach (var k in Levels) k.T *= factor;
+        }
+
         public Keyframe KeyAt(double t, double tolerance)
         {
             double lt = t - Start;
@@ -317,6 +406,13 @@ namespace StillsAndReels
         }
 
         public bool HasCrop { get { return CropL > 0.0005 || CropT > 0.0005 || CropR > 0.0005 || CropB > 0.0005; } }
+    }
+
+    /// <summary>A volume keyframe: V is the volume (1 = 100%) at T seconds into the clip.</summary>
+    [DataContract(Namespace = "")]
+    internal sealed class LevelKey
+    {
+        [DataMember] public double T, V;
     }
 
     [DataContract(Namespace = "")]

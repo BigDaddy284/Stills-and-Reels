@@ -34,7 +34,9 @@ namespace StillsAndReels
         public float[] Peaks;             // audio level, 100 per second
         public string PcmPath;            // 48 kHz stereo s16le of the whole file
         public bool PcmFailed;
-        public readonly Dictionary<string, string> TempoPcm = new Dictionary<string, string>(); // speed -> pcm file
+        public readonly Dictionary<string, string> TempoPcm = new Dictionary<string, string>(); // speed and sound work -> pcm file
+        public readonly List<string> TempoOrder = new List<string>();   // the same keys, oldest first
+        public readonly HashSet<string> TempoBusy = new HashSet<string>(); // being made right now
         public Bitmap Picture;            // decoded image (images only, at most 3840 px)
         public readonly object Sync = new object();
         public volatile bool Removed;     // set when taken out of the bin (background work stops)
@@ -241,6 +243,7 @@ namespace StillsAndReels
                 if (m.PcmPath != null) ImageCache.Delete(m.PcmPath);
                 foreach (var p in m.TempoPcm.Values) ImageCache.Delete(p);
                 m.TempoPcm.Clear();
+                m.TempoOrder.Clear();
                 if (m.Thumb != null) { m.Thumb.Dispose(); m.Thumb = null; }
                 foreach (var kv in m.Strip) kv.Value.Dispose();
                 m.Strip.Clear();
@@ -523,38 +526,127 @@ namespace StillsAndReels
             return peaks;
         }
 
+        static string VariantKey(double speed, string chain)
+        {
+            return speed.ToString("0.####", CultureInfo.InvariantCulture) + "|" + (chain ?? "");
+        }
+
+        static bool Plain(double speed, string chain) { return Math.Abs(speed - 1) < 0.0005 && string.IsNullOrEmpty(chain); }
+
         /// <summary>
-        /// Returns a PCM file for the item played at the given speed (pitch kept), making it if needed.
+        /// Returns a PCM file for the item played at the given speed (pitch kept) after the given sound work
+        /// (an FFmpeg filter chain, see Clip.SoundChain), making it if needed.
         /// Blocks; call from a background thread. Returns null if the item has no usable sound.
         /// </summary>
-        public static string PcmFor(MediaItem m, double speed)
+        public static string PcmFor(MediaItem m, double speed, string chain = "")
         {
             string basePcm;
             lock (m.Sync) basePcm = m.PcmPath;
             if (basePcm == null || !File.Exists(basePcm)) return null;
-            if (Math.Abs(speed - 1) < 0.0005) return basePcm;
-            string key = speed.ToString("0.####", CultureInfo.InvariantCulture);
+            if (Plain(speed, chain)) return basePcm;
+            string key = VariantKey(speed, chain);
             lock (m.Sync)
             {
-                string have;
-                if (m.TempoPcm.TryGetValue(key, out have) && File.Exists(have)) return have;
+                while (true)
+                {
+                    string have;
+                    if (m.TempoPcm.TryGetValue(key, out have) && File.Exists(have)) return have;
+                    if (!m.TempoBusy.Contains(key)) break;
+                    Monitor.Wait(m.Sync, 250);   // another thread is making this one
+                    if (m.Removed) return null;
+                }
+                m.TempoBusy.Add(key);
             }
             string target = Path.Combine(Folder, Guid.NewGuid().ToString("N") + ".pcm");
+            string filters = string.IsNullOrEmpty(chain) ? "" : chain;
+            if (Math.Abs(speed - 1) >= 0.0005) filters += (filters.Length > 0 ? "," : "") + Tempo(speed);
             string args = "-hide_banner -nostdin -loglevel error -protocol_whitelist file -f s16le -ar 48000 -ac 2 -i " + FFmpeg.Quote(basePcm) +
-                          " -af \"" + Tempo(speed) + "\" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 -y " + FFmpeg.Quote(target);
+                          " -af \"" + filters + "\" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 -y " + FFmpeg.Quote(target);
             Process p = null;
+            string made = null;
             try
             {
                 p = FFmpeg.Start(args);
                 p.BeginErrorReadLine();
                 p.StandardOutput.BaseStream.CopyTo(Stream.Null);
-                p.WaitForExit();
-                if (!File.Exists(target)) return null;
-                lock (m.Sync) m.TempoPcm[key] = target;
-                return target;
+                while (!p.WaitForExit(200)) { if (m.Removed) { FFmpeg.KillQuietly(p); break; } }
+                if (!m.Removed && p.ExitCode == 0 && File.Exists(target) && new FileInfo(target).Length > 0) made = target;
             }
-            catch { ImageCache.Delete(target); return null; }
-            finally { FFmpeg.KillQuietly(p); }
+            catch { }
+            finally
+            {
+                FFmpeg.KillQuietly(p);
+                if (made == null) ImageCache.Delete(target);
+                lock (m.Sync)
+                {
+                    if (made != null) { m.TempoPcm[key] = made; m.TempoOrder.Remove(key); m.TempoOrder.Add(key); }
+                    m.TempoBusy.Remove(key);
+                    Monitor.PulseAll(m.Sync);
+                }
+            }
+            return made;
+        }
+
+        /// <summary>
+        /// The same file if it already exists, without waiting. When it doesn't and start is set, it is made in the
+        /// background, so a later call finds it.
+        /// </summary>
+        public static string PcmIfReady(MediaItem m, double speed, string chain, bool start)
+        {
+            string basePcm;
+            lock (m.Sync) basePcm = m.PcmPath;
+            if (basePcm == null || !File.Exists(basePcm)) return null;
+            if (Plain(speed, chain)) return basePcm;
+            string key = VariantKey(speed, chain);
+            lock (m.Sync)
+            {
+                string have;
+                if (m.TempoPcm.TryGetValue(key, out have) && File.Exists(have)) return have;
+                if (!start || m.TempoBusy.Contains(key)) return null;
+            }
+            ThreadPool.QueueUserWorkItem(_ => { try { PcmFor(m, speed, chain); } catch { } });
+            return null;
+        }
+
+        /// <summary>
+        /// Makes the sound files the project's clips need (in the background) and deletes the ones nothing uses any
+        /// more, apart from the newest few, so trying a setting and going back stays instant without the cache growing
+        /// with every value a slider passed through.
+        /// </summary>
+        public void WarmSound(Project p)
+        {
+            var needed = new Dictionary<int, HashSet<string>>();
+            foreach (var c in p.AllClips())
+            {
+                if (c.Kind != ClipKind.Video && c.Kind != ClipKind.Audio) continue;
+                var m = Find(c.MediaId);
+                if (m == null || !m.IsUsable || !m.HasAudio || m.PcmFailed || !c.Sounds) continue;
+                string chain = c.SoundChain();
+                if (Plain(c.Speed, chain)) continue;
+                HashSet<string> set;
+                if (!needed.TryGetValue(m.Id, out set)) needed[m.Id] = set = new HashSet<string>();
+                set.Add(VariantKey(c.Speed, chain));
+                PcmIfReady(m, c.Speed, chain, true);
+            }
+            foreach (var m in items)
+            {
+                HashSet<string> set;
+                needed.TryGetValue(m.Id, out set);
+                lock (m.Sync)
+                {
+                    int spare = 0;
+                    for (int i = m.TempoOrder.Count - 1; i >= 0; i--)
+                    {
+                        string key = m.TempoOrder[i];
+                        if (set != null && set.Contains(key)) continue;
+                        if (++spare <= 3) continue;
+                        string path;
+                        if (m.TempoPcm.TryGetValue(key, out path)) ImageCache.Delete(path);
+                        m.TempoPcm.Remove(key);
+                        m.TempoOrder.RemoveAt(i);
+                    }
+                }
+            }
         }
 
         public static string Tempo(double s)
@@ -566,8 +658,11 @@ namespace StillsAndReels
             return sb.ToString();
         }
 
-        /// <summary>True when every item used by the project has finished its sound analysis.</summary>
-        public bool AudioReady(Project p, out string waitingFor)
+        /// <summary>
+        /// True when every item used by the project has finished its sound analysis. With variants, also when the
+        /// speed-changed or cleaned-up sound each clip needs has been made (anything missing is started).
+        /// </summary>
+        public bool AudioReady(Project p, out string waitingFor, bool variants = false)
         {
             waitingFor = null;
             foreach (var c in p.AllClips())
@@ -576,8 +671,9 @@ namespace StillsAndReels
                 var m = Find(c.MediaId);
                 if (m == null || !m.IsUsable || !m.HasAudio || m.PcmFailed) continue;
                 if (m.PcmPath == null) { waitingFor = m.Name; return false; }
+                if (variants && c.Sounds && PcmIfReady(m, c.Speed, c.SoundChain(), true) == null && waitingFor == null) waitingFor = m.Name;
             }
-            return true;
+            return waitingFor == null;
         }
 
         public void Dispose()

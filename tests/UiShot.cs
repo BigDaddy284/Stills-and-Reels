@@ -41,6 +41,8 @@ static class UiShot
         p.Media.Add(new MediaRef { Id = 2, Path = picture, Name = "landscape.jpg" });
         var vid = new Clip { Id = p.NewId(), Kind = ClipKind.Video, MediaId = 1, Start = 0, Duration = 5 };
         var pic = new Clip { Id = p.NewId(), Kind = ClipKind.Image, MediaId = 2, Start = 5, Duration = 4, Transition = "clock", TransitionDuration = 1, Motion = "zoomin" };
+        vid.Levels.Add(new LevelKey { T = 0.5, V = 1 }); vid.Levels.Add(new LevelKey { T = 2, V = 0.3 }); vid.Levels.Add(new LevelKey { T = 4, V = 1.6 });
+        vid.Duck = true;
         p.Main.Clips.Add(vid); p.Main.Clips.Add(pic);
         var over = new Track { Id = p.NewId(), Kind = TrackKind.Video };
         var pip = new Clip { Id = p.NewId(), Kind = ClipKind.Image, MediaId = 2, Start = 1, Duration = 3.5, Scale = 0.35, X = 0.28, Y = -0.26, Corner = 0.25, BorderWidth = 0.06, DropShadow = 0.7, AnimIn = "pop", AnimOut = "fade" };

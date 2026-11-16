@@ -411,6 +411,7 @@ namespace StillsAndReels
         public bool Keyable;
         public bool KeyActive;      // a keyframe sits at the playhead
         public bool KeyAnimated;    // the clip has keyframes
+        public bool LevelKeys;      // the diamond works the clip's volume keyframes, not its picture keyframes
         public event Action<double> Changing;
         public event Action Committed;
         public event Action KeyClicked;
@@ -1027,6 +1028,47 @@ namespace StillsAndReels
             int cw = TextRenderer.MeasureText(cur, f).Width;
             TextRenderer.DrawText(g, " / " + total, Theme.UiFont(10f), new Rectangle(r.Left + cw, 0, r.Width - cw, Height), p.SubText,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            DrawMeter(g);
+        }
+
+        float meterL, meterR, holdL, holdR;
+
+        /// <summary>
+        /// Sound level of the mix, left and right, between the frame buttons and the canvas button: green, amber
+        /// above -9 dB and red at full scale, with a thin mark that lingers on the loudest recent moment.
+        /// </summary>
+        void DrawMeter(Graphics g)
+        {
+            if (next == null || ratio == null) return;
+            int x0 = next.Right + Theme.S(18), x1 = ratio.Left - Theme.S(16);
+            int w = Math.Min(Theme.S(150), x1 - x0);
+            if (w < Theme.S(50)) return;
+            x0 = x1 - w;
+            float l, r;
+            ed.PlaybackLevels(out l, out r);
+            // fall back gently so the bars can be read
+            meterL = Math.Max(l, meterL * 0.82f); meterR = Math.Max(r, meterR * 0.82f);
+            holdL = Math.Max(l, holdL * 0.985f); holdR = Math.Max(r, holdR * 0.985f);
+            if (!ed.IsPlaying) { meterL = meterR = holdL = holdR = 0; }
+            var p = Theme.Current;
+            int bh = Theme.S(4), gap = Theme.S(3), top = (Height - bh * 2 - gap) / 2;
+            for (int ch = 0; ch < 2; ch++)
+            {
+                float v = ch == 0 ? meterL : meterR, hold = ch == 0 ? holdL : holdR;
+                var rr = new Rectangle(x0, top + ch * (bh + gap), w, bh);
+                using (var b = new SolidBrush(p.ControlBorder)) g.FillRectangle(b, rr);
+                // -48 dB .. 0 dB across the bar
+                Func<float, float> pos = a => a <= 0.004f ? 0 : Math.Max(0, Math.Min(1, (float)(1 + 20 * Math.Log10(a) / 48)));
+                float f = pos(v);
+                if (f > 0)
+                {
+                    float amber = pos(0.355f);
+                    using (var b = new SolidBrush(Color.FromArgb(60, 200, 120))) g.FillRectangle(b, rr.X, rr.Y, w * Math.Min(f, amber), bh);
+                    if (f > amber) using (var b = new SolidBrush(Color.FromArgb(240, 180, 50))) g.FillRectangle(b, rr.X + w * amber, rr.Y, w * (f - amber), bh);
+                }
+                if (hold > 0.004f)
+                    using (var b = new SolidBrush(hold >= 0.999f ? Color.FromArgb(235, 70, 70) : p.SubText)) g.FillRectangle(b, rr.X + (w - 2) * pos(hold), rr.Y, 2, bh);
+            }
         }
     }
 
