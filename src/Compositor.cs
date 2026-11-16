@@ -210,45 +210,88 @@ namespace StillsAndReels
             });
         }
 
-        /// <summary>Box blur, run three times (close to a Gaussian), all four channels.</summary>
+        /// <summary>
+        /// Soft blur of all four channels: three box passes, close to a Gaussian. A wide blur has no fine detail
+        /// left to keep, so it is done on a half, quarter or eighth size copy and stretched back, which is many times faster.
+        /// </summary>
         public static void Blur(IntPtr scan0, int w, int h, int stride, int radius)
         {
             if (radius < 1) return;
-            for (int pass = 0; pass < 3; pass++)
+            int levels = radius <= 2 ? 0 : radius <= 5 ? 1 : radius <= 12 ? 2 : 3;
+            while (levels > 0 && (w >> levels < 16 || h >> levels < 16)) levels--;
+            if (levels == 0 || stride != w * 4) { BoxBlur((byte*)scan0, w, h, stride, radius); return; }
+            var full = new Frame(w, h, Raster.Rent((long)w * h * 4));
+            fixed (byte* fp = full.Data) Buffer.MemoryCopy((void*)scan0, fp, (long)w * h * 4, (long)w * h * 4);
+            Frame small = full;
+            for (int i = 0; i < levels; i++)
             {
-                Raster.Rows(0, h, (long)w * h * 4, (ya, yb) =>
-                {
-                    var tmp = new int[w * 4];
-                    for (int y = ya; y < yb; y++) BoxLine((byte*)scan0 + (long)y * stride, 4, w, radius, tmp);
-                });
-                Raster.Rows(0, w, (long)w * h * 4, (xa, xb) =>
-                {
-                    var tmp = new int[h * 4];
-                    for (int x = xa; x < xb; x++) BoxLine((byte*)scan0 + x * 4, stride, h, radius, tmp);
-                });
+                var next = new Frame((small.Width + 1) / 2, (small.Height + 1) / 2, Raster.Rent((long)((small.Width + 1) / 2) * ((small.Height + 1) / 2) * 4));
+                Raster.Halve(small, next);
+                Raster.Return(small.Data);
+                small = next;
             }
+            fixed (byte* sp = small.Data) BoxBlur(sp, small.Width, small.Height, small.Width * 4, Math.Max(1, (int)Math.Round(radius / (double)(1 << levels))));
+            Raster.Stretch(small, (byte*)scan0, w, h);
+            Raster.Return(small.Data);
         }
 
-        static void BoxLine(byte* start, int step, int n, int r, int[] tmp)
+        static void BoxBlur(byte* p, int w, int h, int stride, int radius)
         {
-            int win = r * 2 + 1;
-            // 1/win as a fixed-point multiply: a divide per pixel is the slow part of a box blur
-            int recip = (int)((1L << 24) / win);
-            for (int c = 0; c < 4; c++)
+            var tmp = Raster.Rent((long)w * h * 4);
+            var pin = GCHandle.Alloc(tmp, GCHandleType.Pinned);
+            try
             {
-                int sum = 0;
-                for (int i = -r; i <= r; i++) sum += start[(long)Clamp(i, n) * step + c];
-                for (int i = 0; i < n; i++)
+                byte* t = (byte*)pin.AddrOfPinnedObject();
+                int win = radius * 2 + 1;
+                // 1/win as a fixed-point multiply: a divide per pixel is the slow part of a box blur
+                int recip = (int)((1L << 24) / win);
+                for (int pass = 0; pass < 3; pass++)
                 {
-                    tmp[i * 4 + c] = (int)(((long)sum * recip + (1 << 23)) >> 24);
-                    sum += start[(long)Clamp(i + r + 1, n) * step + c] - start[(long)Clamp(i - r, n) * step + c];
+                    // across: p -> t
+                    Raster.Rows(0, h, (long)w * h * 4, (ya, yb) =>
+                    {
+                        for (int y = ya; y < yb; y++)
+                        {
+                            byte* s = p + (long)y * stride, o = t + (long)y * w * 4;
+                            for (int c = 0; c < 4; c++)
+                            {
+                                int sum = 0;
+                                for (int i = -radius; i <= radius; i++) sum += s[Clamp(i, w) * 4 + c];
+                                for (int i = 0; i < w; i++)
+                                {
+                                    o[i * 4 + c] = (byte)(((long)sum * recip + (1 << 23)) >> 24);
+                                    sum += s[Clamp(i + radius + 1, w) * 4 + c] - s[Clamp(i - radius, w) * 4 + c];
+                                }
+                            }
+                        }
+                    });
+                    // down: t -> p, a row at a time with a running sum per column (stays in the cache, unlike walking columns)
+                    Raster.Rows(0, h, (long)w * h * 4, (ya, yb) =>
+                    {
+                        var sums = new int[w * 4];
+                        fixed (int* sm = sums)
+                        {
+                            for (int i = -radius; i <= radius; i++)
+                            {
+                                byte* r = t + (long)Clamp(ya + i, h) * w * 4;
+                                for (int x = 0; x < w * 4; x++) sm[x] += r[x];
+                            }
+                            for (int y = ya; y < yb; y++)
+                            {
+                                byte* o = p + (long)y * stride;
+                                byte* add = t + (long)Clamp(y + radius + 1, h) * w * 4, sub = t + (long)Clamp(y - radius, h) * w * 4;
+                                for (int x = 0; x < w * 4; x++)
+                                {
+                                    int v = sm[x];
+                                    o[x] = (byte)(((long)v * recip + (1 << 23)) >> 24);
+                                    sm[x] = v + add[x] - sub[x];
+                                }
+                            }
+                        }
+                    });
                 }
             }
-            for (int i = 0; i < n; i++)
-            {
-                byte* p = start + (long)i * step;
-                p[0] = (byte)tmp[i * 4]; p[1] = (byte)tmp[i * 4 + 1]; p[2] = (byte)tmp[i * 4 + 2]; p[3] = (byte)tmp[i * 4 + 3];
-            }
+            finally { pin.Free(); Raster.Return(tmp); }
         }
 
         static int Clamp(int i, int n) { return i < 0 ? 0 : i >= n ? n - 1 : i; }
@@ -257,8 +300,8 @@ namespace StillsAndReels
         {
             int k = (int)(amount / 100.0 * 2.0 * 256);
             if (k <= 0 || w < 3 || h < 3) return;
-            var copy = new byte[stride * h];
-            Marshal.Copy(scan0, copy, 0, copy.Length);
+            var copy = Raster.Rent((long)stride * h);
+            Marshal.Copy(scan0, copy, 0, stride * h);
             int s = stride;
             Raster.Rows(1, h - 1, (long)w * h * 2, (ya, yb) =>
             {
@@ -281,6 +324,7 @@ namespace StillsAndReels
                     }
                 }
             });
+            Raster.Return(copy);
         }
 
         public static void Vignette(IntPtr scan0, int w, int h, int stride, double amount)

@@ -229,6 +229,42 @@ namespace StillsAndReels
             dst.Opaque = src.Opaque; dst.Premultiplied = true;
         }
 
+        /// <summary>Stretches src over a w × h BGRA buffer (two-by-two sampling, all four channels). For smooth pictures such as blurs.</summary>
+        public static void Stretch(Frame src, byte* dst, int w, int h)
+        {
+            int sw = src.Width, sh = src.Height;
+            var sd = src.Data;
+            var xi = new int[w * 2]; var xf = new int[w];
+            for (int i = 0; i < w; i++)
+            {
+                double u = (i + 0.5) * sw / w - 0.5;
+                int iu = (int)Math.Floor(u);
+                xf[i] = (int)((u - iu) * 256);
+                xi[i * 2] = (iu < 0 ? 0 : iu >= sw ? sw - 1 : iu) * 4; xi[i * 2 + 1] = (iu + 1 < 0 ? 0 : iu + 1 >= sw ? sw - 1 : iu + 1) * 4;
+            }
+            Rows(0, h, (long)w * h * 2, (ya, yb) =>
+            {
+                fixed (byte* s0 = sd) fixed (int* pxi = xi) fixed (int* pxf = xf)
+                {
+                    for (int y = ya; y < yb; y++)
+                    {
+                        double v = (y + 0.5) * sh / h - 0.5;
+                        int iv = (int)Math.Floor(v), fy = (int)((v - iv) * 256), ify = 256 - fy;
+                        byte* a = s0 + (long)(iv < 0 ? 0 : iv >= sh ? sh - 1 : iv) * sw * 4, b = s0 + (long)(iv + 1 < 0 ? 0 : iv + 1 >= sh ? sh - 1 : iv + 1) * sw * 4;
+                        byte* o = dst + (long)y * w * 4;
+                        for (int i = 0; i < w; i++, o += 4)
+                        {
+                            int o0 = pxi[i * 2], o1 = pxi[i * 2 + 1], fx = pxf[i], ifx = 256 - fx;
+                            o[0] = (byte)(((a[o0] * ifx + a[o1] * fx) * ify + (b[o0] * ifx + b[o1] * fx) * fy + 32768) >> 16);
+                            o[1] = (byte)(((a[o0 + 1] * ifx + a[o1 + 1] * fx) * ify + (b[o0 + 1] * ifx + b[o1 + 1] * fx) * fy + 32768) >> 16);
+                            o[2] = (byte)(((a[o0 + 2] * ifx + a[o1 + 2] * fx) * ify + (b[o0 + 2] * ifx + b[o1 + 2] * fx) * fy + 32768) >> 16);
+                            o[3] = (byte)(((a[o0 + 3] * ifx + a[o1 + 3] * fx) * ify + (b[o0 + 3] * ifx + b[o1 + 3] * fx) * fy + 32768) >> 16);
+                        }
+                    }
+                }
+            });
+        }
+
         static int Div255(int x) { x += 128; return (x + (x >> 8)) >> 8; }
 
         // ------------------------------------------------------------------ drawing a layer
@@ -307,7 +343,7 @@ namespace StillsAndReels
         static readonly object poolGate = new object();
         static readonly List<byte[]> pool = new List<byte[]>();
 
-        static byte[] Rent(long bytes)
+        internal static byte[] Rent(long bytes)
         {
             lock (poolGate)
                 for (int i = pool.Count - 1; i >= 0; i--)
@@ -315,7 +351,7 @@ namespace StillsAndReels
             return new byte[bytes];
         }
 
-        static void Return(byte[] b)
+        internal static void Return(byte[] b)
         {
             if (b == null || b.Length < 64 * 1024) return;
             lock (poolGate)
@@ -510,26 +546,40 @@ namespace StillsAndReels
                         int xa = Math.Max(bx0, (int)Math.Ceiling(lo + inv.Tx - 0.5)), xb = Math.Min(bx1, (int)Math.Floor(hi + inv.Tx - 0.5) + 1);
                         int n = xb - xa;
                         if (n <= 0) continue;
-                        byte* o = row;
-                        bool soft = false;
-                        for (int i = 0; i < n; i++, o += 4)
+                        // The stretch of the row that is well inside the picture needs no edge softening or clamping and is
+                        // stepped in fixed point; only the few pixels at each end take the careful path.
+                        int ia = xb, ib = xb;
+                        if (sw >= 2 && sh >= 2)
                         {
-                            double px = xa + i + 0.5 - inv.Tx;
-                            double u = inv.A * px + inv.C * py, v = inv.B * px + inv.D * py;
-                            double cu = Math.Min(u * su + 0.5, (sw - u) * su + 0.5), cv = Math.Min(v * sv + 0.5, (sh - v) * sv + 0.5);
-                            double cover = (cu >= 1 ? 1 : cu <= 0 ? 0 : cu) * (cv >= 1 ? 1 : cv <= 0 ? 0 : cv);
-                            double uu = u - 0.5, vv = v - 0.5;
-                            int iu = (int)Math.Floor(uu), iv = (int)Math.Floor(vv);
-                            int fx = (int)((uu - iu) * 256), fy = (int)((vv - iv) * 256), ifx = 256 - fx, ify = 256 - fy;
-                            int c0 = iu < 0 ? 0 : iu >= sw ? sw - 1 : iu, c1 = iu + 1 < 0 ? 0 : iu + 1 >= sw ? sw - 1 : iu + 1;
-                            int r0 = iv < 0 ? 0 : iv >= sh ? sh - 1 : iv, r1 = iv + 1 < 0 ? 0 : iv + 1 >= sh ? sh - 1 : iv + 1;
-                            byte* a = s0 + ((long)r0 * sw + c0) * 4, b = s0 + ((long)r0 * sw + c1) * 4;
-                            byte* c = s0 + ((long)r1 * sw + c0) * 4, d = s0 + ((long)r1 * sw + c1) * 4;
-                            o[0] = (byte)(((a[0] * ifx + b[0] * fx) * ify + (c[0] * ifx + d[0] * fx) * fy + 32768) >> 16);
-                            o[1] = (byte)(((a[1] * ifx + b[1] * fx) * ify + (c[1] * ifx + d[1] * fx) * fy + 32768) >> 16);
-                            o[2] = (byte)(((a[2] * ifx + b[2] * fx) * ify + (c[2] * ifx + d[2] * fx) * fy + 32768) >> 16);
-                            o[3] = (byte)(((a[3] * ifx + b[3] * fx) * ify + (c[3] * ifx + d[3] * fx) * fy + 32768) >> 16);
-                            if (cover < 0.999) { al[i] = (byte)(cover * 255 + 0.5); soft = true; } else al[i] = 255;
+                            double ilo = bx0 + 0.5 - inv.Tx, ihi = bx1 - 0.5 - inv.Tx;
+                            double eu = Math.Max(mu, 0.5), ev = Math.Max(mv, 0.5);
+                            if (Limit(inv.A, inv.C * py, eu, sw - eu - 0.002, ref ilo, ref ihi) && Limit(inv.B, inv.D * py, ev, sh - ev - 0.002, ref ilo, ref ihi))
+                            {
+                                ia = Math.Max(xa, (int)Math.Ceiling(ilo + inv.Tx - 0.5) + 1);
+                                ib = Math.Min(xb, (int)Math.Floor(ihi + inv.Tx - 0.5));
+                                if (ib <= ia) ia = ib = xb;
+                            }
+                        }
+                        bool soft = SlowSpan(s0, sw, sh, inv, py, su, sv, xa, ia - xa, row, al);
+                        if (ib > ia)
+                        {
+                            double px0 = ia + 0.5 - inv.Tx;
+                            long U = (long)((inv.A * px0 + inv.C * py - 0.5) * 4294967296.0), V = (long)((inv.B * px0 + inv.D * py - 0.5) * 4294967296.0);
+                            long dU = (long)(inv.A * 4294967296.0), dV = (long)(inv.B * 4294967296.0);
+                            byte* o = row + (long)(ia - xa) * 4;
+                            long rowBytes = (long)sw * 4;
+                            for (int i = ia; i < ib; i++, o += 4, U += dU, V += dV)
+                            {
+                                int fx = (int)((U >> 24) & 255), fy = (int)((V >> 24) & 255), ifx = 256 - fx, ify = 256 - fy;
+                                byte* a = s0 + (V >> 32) * rowBytes + (U >> 32) * 4;
+                                byte* c = a + rowBytes;
+                                o[0] = (byte)(((a[0] * ifx + a[4] * fx) * ify + (c[0] * ifx + c[4] * fx) * fy + 32768) >> 16);
+                                o[1] = (byte)(((a[1] * ifx + a[5] * fx) * ify + (c[1] * ifx + c[5] * fx) * fy + 32768) >> 16);
+                                o[2] = (byte)(((a[2] * ifx + a[6] * fx) * ify + (c[2] * ifx + c[6] * fx) * fy + 32768) >> 16);
+                                o[3] = (byte)(((a[3] * ifx + a[7] * fx) * ify + (c[3] * ifx + c[7] * fx) * fy + 32768) >> 16);
+                            }
+                            soft |= SlowSpan(s0, sw, sh, inv, py, su, sv, ib, xb - ib, row + (long)(ib - xa) * 4, al + (ib - xa));
+                            if (soft || l.Alpha != null || l.Mask != null) for (int i = ia - xa; i < ib - xa; i++) al[i] = 255;
                         }
                         byte* alpha = null;
                         if (l.Alpha != null || l.Mask != null)
@@ -544,6 +594,32 @@ namespace StillsAndReels
                     }
                 }
             });
+        }
+
+        /// <summary>Samples count pixels starting at canvas column x with edge coverage; true if any was partly covered.</summary>
+        static bool SlowSpan(byte* s0, int sw, int sh, Inv inv, double py, double su, double sv, int x, int count, byte* o, byte* al)
+        {
+            bool soft = false;
+            for (int i = 0; i < count; i++, o += 4)
+            {
+                double px = x + i + 0.5 - inv.Tx;
+                double u = inv.A * px + inv.C * py, v = inv.B * px + inv.D * py;
+                double cu = Math.Min(u * su + 0.5, (sw - u) * su + 0.5), cv = Math.Min(v * sv + 0.5, (sh - v) * sv + 0.5);
+                double cover = (cu >= 1 ? 1 : cu <= 0 ? 0 : cu) * (cv >= 1 ? 1 : cv <= 0 ? 0 : cv);
+                double uu = u - 0.5, vv = v - 0.5;
+                int iu = (int)Math.Floor(uu), iv = (int)Math.Floor(vv);
+                int fx = (int)((uu - iu) * 256), fy = (int)((vv - iv) * 256), ifx = 256 - fx, ify = 256 - fy;
+                int c0 = iu < 0 ? 0 : iu >= sw ? sw - 1 : iu, c1 = iu + 1 < 0 ? 0 : iu + 1 >= sw ? sw - 1 : iu + 1;
+                int r0 = iv < 0 ? 0 : iv >= sh ? sh - 1 : iv, r1 = iv + 1 < 0 ? 0 : iv + 1 >= sh ? sh - 1 : iv + 1;
+                byte* a = s0 + ((long)r0 * sw + c0) * 4, b = s0 + ((long)r0 * sw + c1) * 4;
+                byte* c = s0 + ((long)r1 * sw + c0) * 4, d = s0 + ((long)r1 * sw + c1) * 4;
+                o[0] = (byte)(((a[0] * ifx + b[0] * fx) * ify + (c[0] * ifx + d[0] * fx) * fy + 32768) >> 16);
+                o[1] = (byte)(((a[1] * ifx + b[1] * fx) * ify + (c[1] * ifx + d[1] * fx) * fy + 32768) >> 16);
+                o[2] = (byte)(((a[2] * ifx + b[2] * fx) * ify + (c[2] * ifx + d[2] * fx) * fy + 32768) >> 16);
+                o[3] = (byte)(((a[3] * ifx + b[3] * fx) * ify + (c[3] * ifx + d[3] * fx) * fy + 32768) >> 16);
+                if (cover < 0.999) { al[i] = (byte)(cover * 255 + 0.5); soft = true; } else al[i] = 255;
+            }
+            return soft;
         }
 
         /// <summary>Narrows [lo, hi] to where k·x + c stays within [min, max]. False when nothing is left.</summary>
@@ -658,13 +734,14 @@ namespace StillsAndReels
         {
             double fscale = Math.Max(1.0, 1.0 / scale);
             double support = 2.0 * fscale;
-            int count = (int)Math.Ceiling(support * 2) + 1;
+            bool four = fscale == 1.0;      // enlarging: exactly the four nearest pixels count
+            int count = four ? 4 : (int)Math.Ceiling(support * 2) + 1;
             var t = new Taps { Start = new int[n], Weights = new int[n * count], Count = count };
             var w = new double[count];
             for (int i = 0; i < n; i++)
             {
                 double centre = (d0 + i + 0.5 - offset) / scale;   // in source pixels, centres at k + 0.5
-                int first = (int)Math.Floor(centre - support);
+                int first = four ? (int)Math.Floor(centre - 0.5) - 1 : (int)Math.Floor(centre - support);
                 double sum = 0;
                 for (int k = 0; k < count; k++) { w[k] = Cubic((first + k + 0.5 - centre) / fscale); sum += w[k]; }
                 if (Math.Abs(sum) < 1e-9) { sum = 1; w[count / 2] = 1; }
@@ -713,7 +790,16 @@ namespace StillsAndReels
                         {
                             int b = 0, g = 0, r = 0, a = 0, first = st[i];
                             int* wp = wt + i * cx;
-                            for (int k = 0; k < cx; k++)
+                            if (cx == 4 && first >= 0 && first + 3 < sw)
+                            {
+                                byte* p = s + first * 4;
+                                int w0 = wp[0], w1 = wp[1], w2 = wp[2], w3 = wp[3];
+                                b = p[0] * w0 + p[4] * w1 + p[8] * w2 + p[12] * w3;
+                                g = p[1] * w0 + p[5] * w1 + p[9] * w2 + p[13] * w3;
+                                r = p[2] * w0 + p[6] * w1 + p[10] * w2 + p[14] * w3;
+                                a = p[3] * w0 + p[7] * w1 + p[11] * w2 + p[15] * w3;
+                            }
+                            else for (int k = 0; k < cx; k++)
                             {
                                 int xx = first + k;
                                 if (xx < 0) xx = 0; else if (xx >= sw) xx = sw - 1;
@@ -752,7 +838,16 @@ namespace StillsAndReels
                         for (int i = 0; i < w; i++, o += 4)
                         {
                             int b = 0, g = 0, r = 0, a = 0, off = i * 4;
-                            for (int k = 0; k < cy; k++)
+                            if (cy == 4)
+                            {
+                                byte* p0 = rows[0] + off, p1 = rows[1] + off, p2 = rows[2] + off, p3 = rows[3] + off;
+                                int w0 = wp[0], w1 = wp[1], w2 = wp[2], w3 = wp[3];
+                                b = p0[0] * w0 + p1[0] * w1 + p2[0] * w2 + p3[0] * w3;
+                                g = p0[1] * w0 + p1[1] * w1 + p2[1] * w2 + p3[1] * w3;
+                                r = p0[2] * w0 + p1[2] * w1 + p2[2] * w2 + p3[2] * w3;
+                                a = p0[3] * w0 + p1[3] * w1 + p2[3] * w2 + p3[3] * w3;
+                            }
+                            else for (int k = 0; k < cy; k++)
                             {
                                 byte* p = rows[k] + off;
                                 int wv = wp[k];
