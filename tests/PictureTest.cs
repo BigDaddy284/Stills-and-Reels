@@ -379,6 +379,236 @@ static class PictureTest
         foreach (var f in new[] { png, outPng, outJpg }) try { File.Delete(f); } catch { }
     }
 
+    static void Adjustments()
+    {
+        using (var src = Gradient(256, 64))
+        using (var dst = new PicSurface(256, 64))
+        {
+            var a = new PicAdjustments();
+            Check(a.IsIdentity, "untouched sliders change nothing");
+            PicAdjust.Apply(src, dst, a);
+            Check(Same(src, dst), "an untouched adjustment copies the picture exactly");
+
+            a.Brightness = 40;
+            PicAdjust.Apply(src, dst, a);
+            Check(dst.GetColor(100, 20).R > src.GetColor(100, 20).R && dst.GetColor(100, 20).G > src.GetColor(100, 20).G, "brightness lightens");
+            a = new PicAdjustments { Exposure = -50 };
+            PicAdjust.Apply(src, dst, a);
+            Check(dst.GetColor(200, 20).R < src.GetColor(200, 20).R, "lower exposure darkens");
+
+            a = new PicAdjustments { Contrast = 60 };
+            PicAdjust.Apply(src, dst, a);
+            Check(dst.GetColor(30, 5).R < 30 && dst.GetColor(230, 5).R > 230, "contrast pushes darks down and lights up");
+
+            a = new PicAdjustments { Grayscale = true };
+            PicAdjust.Apply(src, dst, a);
+            var gc = dst.GetColor(180, 40);
+            Check(gc.R == gc.G && gc.G == gc.B && gc.A == 255, "black and white makes every pixel grey");
+
+            a = new PicAdjustments { Saturation = -100 };
+            PicAdjust.Apply(src, dst, a);
+            gc = dst.GetColor(180, 40);
+            Check(Math.Abs(gc.R - gc.G) <= 2 && Math.Abs(gc.G - gc.B) <= 2, "no saturation leaves no colour");
+
+            a = new PicAdjustments { Invert = true };
+            PicAdjust.Apply(src, dst, a);
+            Check(dst.GetColor(17, 33) == Color.FromArgb(255, 255 - 17, 255 - 33, 255 - 40), "invert flips every channel");
+            using (var twice = new PicSurface(256, 64))
+            {
+                PicAdjust.Apply(dst, twice, a);
+                Check(Same(src, twice), "inverting twice gives the picture back");
+            }
+
+            a = new PicAdjustments { Temperature = 60 };
+            PicAdjust.Apply(src, dst, a);
+            Check(dst.GetColor(120, 30).R > src.GetColor(120, 30).R && dst.GetColor(120, 30).B < src.GetColor(120, 30).B, "warmer adds red and takes blue away");
+
+            a = new PicAdjustments { Sepia = 100 };
+            PicAdjust.Apply(src, dst, a);
+            gc = dst.GetColor(200, 50);
+            Check(gc.R > gc.G && gc.G > gc.B, "sepia is brown: more red than green than blue");
+
+            // only inside a selection
+            a = new PicAdjustments { Invert = true };
+            var sel = PicSelection.FromRect(new Rectangle(10, 10, 20, 20), new Size(256, 64));
+            PicAdjust.Apply(src, dst, a, sel);
+            Check(dst.GetColor(15, 15) == Color.FromArgb(255, 255 - 15, 255 - 15, 255 - 40) && dst.GetPixel(100, 30) == src.GetPixel(100, 30) && dst.GetPixel(9, 15) == src.GetPixel(9, 15),
+                "an adjustment stays inside the selection");
+
+            a = new PicAdjustments { Blur = 50 };
+            using (var edge = new PicSurface(100, 40))
+            using (var soft = new PicSurface(100, 40))
+            {
+                edge.Fill(new Rectangle(0, 0, 50, 40), 0xFF000000u);
+                edge.Fill(new Rectangle(50, 0, 50, 40), 0xFFFFFFFFu);
+                PicAdjust.Apply(edge, soft, a);
+                int mid = soft.GetColor(50, 20).R;
+                Check(mid > 40 && mid < 215 && soft.GetColor(2, 20).R < 5 && soft.GetColor(97, 20).R > 250, "blur softens an edge and leaves flat areas alone");
+            }
+
+            // a hard-edged block, so looks that only touch detail (sharpen) have something to work on
+            src.Fill(new Rectangle(100, 20, 40, 20), 0xFFFFFFFFu);
+            foreach (var look in PicAdjustments.Looks)
+            {
+                PicAdjust.Apply(src, dst, look.Value);
+                if (Same(src, dst)) Check(false, "the look '" + look.Key + "' changes the picture");
+            }
+            Check(PicAdjustments.Looks.Length >= 8, "there is a set of ready-made looks");
+        }
+
+        // levels and curves
+        var lv = new PicLevels { InBlack = 50, InWhite = 200 };
+        var curve = lv.ToCurve();
+        Check(curve[50] == 0 && curve[200] == 255 && curve[20] == 0 && curve[240] == 255 && curve[125] > 120 && curve[125] < 136, "levels stretch the chosen range to full");
+        lv = new PicLevels { Gamma = 2f };
+        Check(lv.ToCurve()[128] > 160 && lv.ToCurve()[0] == 0 && lv.ToCurve()[255] == 255, "midtones above 1 brighten the middle only");
+        Check(new PicLevels().IsIdentity && new PicLevels().ToCurve()[77] == 77, "untouched levels change nothing");
+        var c2 = PicAdjust.CurveFromPoints(new[] { new PointF(0, 0), new PointF(128, 190), new PointF(255, 255) });
+        bool rising = true;
+        for (int i = 1; i < 256; i++) if (c2[i] < c2[i - 1]) rising = false;
+        Check(c2[0] == 0 && c2[255] == 255 && Math.Abs(c2[128] - 190) <= 2 && rising, "a curve passes through its points and never turns back");
+        var c3 = PicAdjust.CurveFromPoints(new[] { new PointF(0, 0), new PointF(255, 255) });
+        Check(c3[60] == 60 && c3[200] == 200, "a straight curve changes nothing");
+
+        // histogram and auto fix
+        using (var flat = new PicSurface(100, 100))
+        {
+            flat.Fill(new Rectangle(0, 0, 50, 100), PicSurface.Premultiply(Color.FromArgb(255, 90, 90, 90)));
+            flat.Fill(new Rectangle(50, 0, 50, 100), PicSurface.Premultiply(Color.FromArgb(255, 170, 170, 170)));
+            var h = PicAdjust.Histogram(flat);
+            Check(h.Count == 10000 && h.Luma[90] == 5000 && h.Luma[170] == 5000 && h.R[90] == 5000, "the histogram counts every pixel");
+            var auto = PicAdjust.AutoLevels(h);
+            Check(auto.InBlack <= 60 && auto.InBlack >= 40 && auto.InWhite >= 195 && auto.InWhite <= 215, "auto fix opens up a flat picture without overdoing it");
+            var hs = PicAdjust.Histogram(flat, PicSelection.FromRect(new Rectangle(0, 0, 10, 10), new Size(100, 100)));
+            Check(hs.Count == 100 && hs.Luma[90] == 100, "the histogram can look at just the selection");
+        }
+        using (var full = Gradient(256, 256))
+        {
+            var auto = PicAdjust.AutoLevels(PicAdjust.Histogram(full));
+            Check(auto.InBlack < 12 && auto.InWhite > 200, "auto fix leaves a full-range picture nearly alone");
+        }
+        using (var cast = Solid(40, 40, Color.FromArgb(255, 200, 150, 100)))
+        {
+            byte[] r, g, b;
+            PicAdjust.AutoWhiteBalance(PicAdjust.Histogram(cast), out r, out g, out b);
+            Check(r[200] < 200 && b[100] > 100 && Math.Abs(r[200] - b[100]) < 30, "auto white balance pulls a colour cast towards grey");
+        }
+    }
+
+    static void StraightenAndTrim()
+    {
+        var inside = PicAdjust.LargestInside(400, 300, 0);
+        Check(inside.Width == 400 && inside.Height == 300, "no turn keeps the whole picture");
+        inside = PicAdjust.LargestInside(400, 300, 90);
+        Check(Math.Abs(inside.Width - 300) < 1 && Math.Abs(inside.Height - 300 * 300 / 400f) < 1.5f || inside.Width <= 300.5f && inside.Height <= 400.5f, "a quarter turn still fits inside");
+        var i5 = PicAdjust.LargestInside(400, 300, 5);
+        var i5n = PicAdjust.LargestInside(400, 300, -5);
+        Check(i5.Width < 400 && i5.Height < 300 && i5.Width > 340 && i5.Height > 250 && Math.Abs(i5.Width - i5n.Width) < 0.01f, "a small turn loses only a little, the same both ways");
+
+        var es = new EditSession(Solid(400, 300, Color.FromArgb(255, 20, 120, 220)), null, false);
+        es.RotateFree(5, true);
+        Check(es.Size.Width < 400 && es.Size.Height < 300 && es.CanUndo, "straighten with crop makes the picture a little smaller");
+        using (var flat = es.FlattenSurface())
+        {
+            bool solid = true;
+            foreach (var pt in new[] { new Point(0, 0), new Point(flat.Width - 1, 0), new Point(0, flat.Height - 1), new Point(flat.Width - 1, flat.Height - 1), new Point(flat.Width / 2, flat.Height / 2) })
+            {
+                var c = flat.GetColor(pt.X, pt.Y);
+                if (c.A < 250 || !Near(c, 20, 120, 220, 6)) solid = false;
+            }
+            Check(solid, "after straighten with crop there are no empty corners");
+        }
+        es.Undo();
+        Check(es.Size == new Size(400, 300), "undo gives the size back");
+        es.RotateFree(30, false);
+        Check(es.Size.Width > 400 && es.Size.Height > 300, "a free turn without crop grows the picture to fit");
+        Check(es.Compositor.Picture.GetColor(1, 1).A == 0 && Near(es.Compositor.Picture.GetColor(es.Size.Width / 2, es.Size.Height / 2), 20, 120, 220, 6), "its corners are see-through and its middle is the picture");
+        Check(es.TrimEdges() == false || es.Size.Width > 0, "trim copes with a turned picture");
+        es.Dispose();
+
+        // trim: see-through margins, then a flat-colour frame
+        using (var s = new PicSurface(200, 150))
+        {
+            s.Fill(new Rectangle(40, 30, 100, 60), PicSurface.Premultiply(Color.Red));
+            Check(PicAdjust.TrimBounds(s) == new Rectangle(40, 30, 100, 60), "trim finds the part that is not see-through");
+        }
+        using (var s = Solid(200, 150, Color.White))
+        {
+            s.Fill(new Rectangle(25, 35, 120, 70), PicSurface.Premultiply(Color.FromArgb(255, 10, 60, 200)));
+            Check(PicAdjust.TrimBounds(s) == new Rectangle(25, 35, 120, 70), "trim cuts a plain white frame away");
+        }
+        using (var s = Solid(64, 64, Color.FromArgb(255, 40, 40, 40)))
+            Check(PicAdjust.TrimBounds(s) == s.Bounds, "a picture of one colour is left alone");
+
+        var et = new EditSession(Solid(200, 150, Color.White), null, false);
+        et.AddObject(new ShapeObject(ShapeKind.Rect, new PointF(50, 40), new PointF(150, 110), Color.Black, 4f, Color.FromArgb(255, 200, 0, 0)));
+        Check(et.TrimEdges() && et.Size.Width < 120 && et.Size.Width > 95 && et.Size.Height < 85 && et.Size.Height > 65, "trim edges crops to what was drawn");
+        et.Undo();
+        Check(et.Size == new Size(200, 150), "undo brings the trimmed edges back");
+        et.Dispose();
+    }
+
+    static void Projects(string dir)
+    {
+        string file = Path.Combine(dir, "pt-layers" + PicProject.Extension);
+        var es = new EditSession(Gradient(320, 200), null, false);
+        es.AddStroke(new Stroke(EditTool.Pen, Color.Red, 6f, new[] { new PointF(20, 20), new PointF(120, 60), new PointF(200, 30) }));
+        var top = es.AddLayer("Sticker", Solid(60, 40, Color.FromArgb(200, 0, 255, 0)), 100, 80);
+        es.SetLayerOpacity(1, 0.6f);
+        es.SetLayerBlend(1, PicBlend.Screen);
+        es.AddObject(new ShapeObject(ShapeKind.Arrow, new PointF(10, 10), new PointF(50, 30), Color.Yellow, 3f, Color.Empty));
+        es.AddObject(new TextObject("Hello\nworld", "Arial", 18f, true, false, new PointF(5, 5), Color.White, Color.FromArgb(160, 0, 0, 0)));
+        es.AddObject(new StepObject(new PointF(30, 30), 12f, 3, Color.Blue));
+        es.AddLayer("Empty", null, 0, 0);
+        es.SetLayerVisible(2, false);
+
+        PicProject.Save(es.State, file);
+        Check(File.Exists(file) && PicProject.IsProject(file) && PicProject.IsProject("a.SRPIC") && !PicProject.IsProject("a.png"), "a layered picture saves to its own kind of file");
+        Check(new FileInfo(file).Length < 320 * 200 * 4, "the file is packed smaller than its raw pixels");
+        Check(!File.Exists(file + ".tmp"), "no half-written file is left behind");
+
+        var back = PicProject.Load(file);
+        Check(back.Size == new Size(320, 200) && back.Layers.Length == 3, "it opens with the same size and layers");
+        var l0 = back.Layers[0]; var l1 = back.Layers[1]; var l2 = back.Layers[2];
+        Check(l0.Name == "Background" && l1.Name == "Sticker" && l2.Name == "Empty", "layer names are kept");
+        Check(Math.Abs(l1.Opacity - 0.6f) < 0.001f && l1.Blend == PicBlend.Screen && l1.X == 100 && l1.Y == 80 && !l2.Visible && l1.Visible, "opacity, mixing, place and hidden state are kept");
+        Check(Same(l0.Pixels, es.State.Layers[0].Pixels) && Same(l1.Pixels, es.State.Layers[1].Pixels) && l2.Pixels == null, "every layer's pixels are exact");
+        Check(l0.Objects.Length == 1 && l1.Objects.Length == 3 && l2.Objects.Length == 0, "drawings stay on their layers");
+        var st = l0.Objects[0] as Stroke;
+        Check(st != null && st.Tool == EditTool.Pen && st.Color.ToArgb() == Color.Red.ToArgb() && st.Points.Length == 3 && st.Points[1] == new PointF(120, 60) && st.Width == 6f, "a pen line is kept as a line");
+        var sh = l1.Objects[0] as ShapeObject;
+        Check(sh != null && sh.Kind == ShapeKind.Arrow && sh.B == new PointF(50, 30) && sh.Fill.IsEmpty && sh.Color.ToArgb() == Color.Yellow.ToArgb(), "an arrow is kept as an arrow");
+        var tx = l1.Objects[1] as TextObject;
+        Check(tx != null && tx.Text == "Hello\nworld" && tx.FontName == "Arial" && tx.Size == 18f && tx.Bold && !tx.Italic && tx.Fill.A == 160, "text is kept as text that can still be changed");
+        var sp = l1.Objects[2] as StepObject;
+        Check(sp != null && sp.Number == 3 && sp.Radius == 12f, "a numbered step is kept");
+
+        var again = new EditSession(back, file);
+        using (var a = es.FlattenSurface()) using (var b = again.FlattenSurface()) Check(Same(a, b), "the reopened picture looks exactly the same");
+        Check(!again.IsDirty && !again.CanUndo, "a reopened picture starts clean");
+        again.AddStroke(new Stroke(EditTool.Pen, Color.Blue, 4f, new[] { new PointF(1, 1), new PointF(9, 9) }));
+        PicProject.Save(again.State, file);
+        var third = PicProject.Load(file);
+        Check(third.Layers[2].Objects.Length == 1, "saving over the same project file works");
+        foreach (var l in third.Layers) if (l.Pixels != null) l.Pixels.Dispose();
+        again.Dispose();
+        es.Dispose();
+
+        // broken files are refused, not half-loaded
+        string bad = Path.Combine(dir, "pt-bad" + PicProject.Extension);
+        File.WriteAllBytes(bad, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+        bool refused = false;
+        try { PicProject.Load(bad); } catch (InvalidDataException) { refused = true; }
+        Check(refused, "a file that is not a layered picture is refused");
+        var bytes = File.ReadAllBytes(file);
+        Array.Resize(ref bytes, bytes.Length / 2);
+        File.WriteAllBytes(bad, bytes);
+        refused = false;
+        try { PicProject.Load(bad); } catch (Exception) { refused = true; }
+        Check(refused, "a file that was cut short is refused");
+        foreach (var f in new[] { file, bad }) try { File.Delete(f); } catch { }
+    }
+
     static int Main(string[] args)
     {
         string dir = args.Length > 0 ? args[0] : Path.GetTempPath();
@@ -391,6 +621,9 @@ static class PictureTest
             UndoLimits();
             Selections();
             LoadAndSave(dir);
+            Adjustments();
+            StraightenAndTrim();
+            Projects(dir);
         }
         catch (Exception ex) { Console.WriteLine("FAIL exception: " + ex); fails++; }
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
