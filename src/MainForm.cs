@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 namespace StillsAndReels
 {
-    internal sealed class MainForm : Form
+    internal sealed partial class MainForm : Form
     {
         const string AppName = "Stills & Reels";
 
@@ -130,10 +130,11 @@ namespace StillsAndReels
             editor.RecordRequested += (s, e) => OpenVideoSnip();
 
             sidebar.ToolSelected += t => SelectTool(t);
-            sidebar.ColorPicked += c => SetToolColor(c);
-            sidebar.SizeChangedByUser += v => { if (toolSizes.ContainsKey(tool)) { toolSizes[tool] = v; ApplyToolToCanvas(); } };
+            sidebar.ColorPicked += c => SetPictureColor(c, true);
+            sidebar.SizeChangedByUser += v => SetPictureSize(v);
             sidebar.TransformRequested += t => Transform(t);
             sidebar.CommandRequested += OnSidebarCommand;
+            WirePictureEditor();
 
             Controls.Add(content);
             Controls.Add(sidebar);
@@ -430,7 +431,8 @@ namespace StillsAndReels
             help.DropDownItems.Add(Item("&Pick-up log", Keys.None, (s, e) => OpenPickupLog()));
             help.DropDownItems.Add(Item("&About " + AppName.Replace("&", "&&"), Keys.None, (s, e) => ShowAbout()));
 
-            menu.Items.AddRange(new ToolStripItem[] { file, editMenu, view, help });
+            AddPictureMenus(file, editMenu, view);
+            menu.Items.AddRange(new ToolStripItem[] { file, editMenu, miImage, view, help });
             foreach (ToolStripMenuItem top in menu.Items)
             {
                 top.Padding = new Padding(Theme.S(10), Theme.S(4), Theme.S(10), Theme.S(4));
@@ -544,6 +546,7 @@ namespace StillsAndReels
             toolSizes[EditTool.Pencil] = settings.GetInt("PencilSize", 3);
             toolSizes[EditTool.Highlighter] = settings.GetInt("HighlighterSize", 18);
             toolSizes[EditTool.Eraser] = settings.GetInt("EraserSize", 16);
+            LoadPictureSettings();
         }
 
         void SaveSettings()
@@ -572,6 +575,7 @@ namespace StillsAndReels
             settings.Set("PencilSize", toolSizes[EditTool.Pencil]);
             settings.Set("HighlighterSize", toolSizes[EditTool.Highlighter]);
             settings.Set("EraserSize", toolSizes[EditTool.Eraser]);
+            SavePictureSettings();
             settings.Save();
         }
 
@@ -816,7 +820,7 @@ namespace StillsAndReels
         void StartEditSession()
         {
             edit = current.Surface != null ? new EditSession(current.Surface.Clone(), current.SourcePath, false) : new EditSession(current.Image, current.SourcePath);
-            edit.Changed += (s, e) => { SyncSidebar(); UpdateUi(); };
+            edit.Changed += (s, e) => OnPictureEditChanged();
             canvas.Edit = edit;
         }
 
@@ -832,6 +836,7 @@ namespace StillsAndReels
                 if (r == DialogResult.Cancel) return false;
                 if (r == DialogResult.Yes && !SaveAs()) return false;
             }
+            DropAdjust(true);
             canvas.Edit = null;
             edit.Dispose();
             edit = null;
@@ -876,6 +881,7 @@ namespace StillsAndReels
                 case "save": SaveAs(); break;
                 case "applycrop": ApplyCrop(); break;
                 case "cancelcrop": CancelCrop(); break;
+                default: OnPictureCommand(cmd); break;
             }
         }
 
@@ -1301,34 +1307,16 @@ namespace StillsAndReels
             UpdateUi();
         }
 
-        void SyncSidebar()
-        {
-            KeyValuePair<string, Color>[] pal = tool == EditTool.Highlighter ? Palettes.Highlighter : Palettes.Ink;
-            Color c;
-            if (!toolColors.TryGetValue(tool, out c)) c = Color.Black;
-            int size;
-            if (!toolSizes.TryGetValue(tool, out size)) size = 4;
-            int max = (tool == EditTool.Highlighter || tool == EditTool.Eraser) ? 60 : 30;
-            sidebar.SetState(edit != null, tool, Palettes.Colors(pal), c, size, max,
-                edit != null && edit.CanUndo, edit != null && edit.CanRedo, edit != null && edit.HasInk);
-        }
+        void SyncSidebar() { SyncPictureSidebar(); }
 
         void ApplyToolToCanvas()
         {
             canvas.Tool = tool;
             Color c;
-            canvas.ToolColor = toolColors.TryGetValue(tool, out c) ? c : Color.Black;
+            canvas.ToolColor = toolColors.TryGetValue(ToolKey(tool), out c) ? c : Color.Black;
             int sz;
-            canvas.ToolSize = toolSizes.TryGetValue(tool, out sz) ? sz * Theme.Scale : 4;
+            canvas.ToolSize = toolSizes.TryGetValue(ToolKey(tool), out sz) ? sz * Theme.Scale : 4;
             canvas.RefreshTool();
-        }
-
-        void SetToolColor(Color c)
-        {
-            if (!toolColors.ContainsKey(tool)) return;
-            toolColors[tool] = c;
-            ApplyToolToCanvas();
-            SyncSidebar();
         }
 
         void ApplyCrop()
@@ -1359,6 +1347,7 @@ namespace StillsAndReels
         {
             if (mode == AppMode.VideoEdit) { editor.Undo(); return; }
             if (canvas.HasFloating) { canvas.CancelPaste(); return; }
+            if (HasPendingAdjust) { DropAdjust(true); return; }
             if (edit != null) edit.Undo();
         }
 
@@ -1476,7 +1465,7 @@ namespace StillsAndReels
             canvas.ShowImage(null, false);
             edit = new EditSession(bmp, null, true);
             bmp.Dispose();
-            edit.Changed += (s, e) => { SyncSidebar(); UpdateUi(); };
+            edit.Changed += (s, e) => OnPictureEditChanged();
             canvas.Edit = edit;
             canvas.FitToWindow();
             SelectTool(tool == EditTool.Crop || tool == EditTool.Pan ? lastDrawingTool : tool);
@@ -1493,7 +1482,7 @@ namespace StillsAndReels
 
         Bitmap CurrentPicture()
         {
-            if (edit != null) { canvas.CommitPaste(); return edit.Flatten(); }
+            if (edit != null) { Prepare(); return edit.Flatten(); }
             if (current != null && current.Image != null) return new Bitmap(current.Image);
             return null;
         }
@@ -1502,6 +1491,7 @@ namespace StillsAndReels
         {
             if (mode == AppMode.VideoEdit) { editor.CopySelected(false); return; }
             if (mode == AppMode.Videos) { SystemSounds(); return; }
+            if (mode == AppMode.PictureEdit && edit != null && edit.Selection != null) { CopySelection(false); return; }
             using (var bmp = CurrentPicture())
             {
                 if (bmp == null) { SystemSounds(); return; }
@@ -1693,6 +1683,7 @@ namespace StillsAndReels
         {
             // let text boxes (e.g. the words of a text clip) handle their own editing keys
             if (TextBoxFocused() && IsTextKey(keyData)) return false;
+            if (PictureKey(keyData)) return true;
             if (mode == AppMode.VideoEdit && !IsMenuOpen())
             {
                 switch (keyData)
@@ -1806,6 +1797,7 @@ namespace StillsAndReels
             miDark.Checked = Theme.Current.Name == "Dark";
             miLight.Checked = Theme.Current.Name == "Light";
             miGraphite.Checked = Theme.Current.Name == "Graphite";
+            UpdatePictureMenus(pictures);
         }
 
         string PictureName
