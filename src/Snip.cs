@@ -5,11 +5,12 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace StillsAndReels
 {
-    internal enum SnipShape { Rectangle, Freeform }
+    internal enum SnipShape { Rectangle, Freeform, Window, FullScreen }
 
     /// <summary>
     /// Lets the user drag a rectangle or draw a freeform outline over a picture. Used full-screen over a
@@ -28,12 +29,17 @@ namespace StillsAndReels
         public Bitmap Result { get; private set; }
         public Rectangle ResultRect { get; private set; }   // in source pixels (rectangle snips)
         public string Purpose;                              // hint shown before dragging
+        /// <summary>Window snips: the windows on screen, front first, in source pixels.</summary>
+        public List<Rectangle> Windows = new List<Rectangle>();
+        readonly Point screenOrigin;                        // where the source's top-left is on the desktop
+        bool mouseInside;
 
         public SnipSelector(Bitmap source, SnipShape shape, bool fullScreen, Rectangle screenBounds)
         {
             this.source = source;
             this.shape = shape;
             this.fullScreen = fullScreen;
+            screenOrigin = screenBounds.Location;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
             KeyPreview = true;
             ShowInTaskbar = false;
@@ -93,7 +99,54 @@ namespace StillsAndReels
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); }
+            if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); return; }
+            // arrow keys move the pointer one pixel at a time (Shift: ten), for an exact edge
+            int step = e.Shift ? 10 : 1, dx = 0, dy = 0;
+            if (e.KeyCode == Keys.Left) dx = -step;
+            else if (e.KeyCode == Keys.Right) dx = step;
+            else if (e.KeyCode == Keys.Up) dy = -step;
+            else if (e.KeyCode == Keys.Down) dy = step;
+            if (dx != 0 || dy != 0)
+            {
+                try { var c = Cursor.Position; Cursor.Position = new Point(c.X + dx, c.Y + dy); } catch { }
+                e.Handled = true;
+            }
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys k = keyData & Keys.KeyCode;
+            return k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down || base.IsInputKey(keyData);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); mouseInside = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); mouseInside = false; Invalidate(); }
+
+        /// <summary>Window snips: the window under a point (the front-most one), or the whole screen it is on.</summary>
+        Rectangle WindowAt(Point client)
+        {
+            var ip = Point.Truncate(ToImage(client));
+            var all = new Rectangle(0, 0, source.Width, source.Height);
+            foreach (var w in Windows)
+            {
+                if (!w.Contains(ip)) continue;
+                var r = w; r.Intersect(all);
+                if (r.Width >= 3 && r.Height >= 3) return r;
+            }
+            try
+            {
+                var scr = Screen.FromPoint(new Point(ip.X + screenOrigin.X, ip.Y + screenOrigin.Y)).Bounds;
+                scr.Offset(-screenOrigin.X, -screenOrigin.Y);
+                scr.Intersect(all);
+                if (scr.Width >= 3 && scr.Height >= 3) return scr;
+            }
+            catch { }
+            return all;
+        }
+
+        RectangleF ToClient(Rectangle imagePixels)
+        {
+            return new RectangleF(imageRect.X + imagePixels.X * scale, imageRect.Y + imagePixels.Y * scale, imagePixels.Width * scale, imagePixels.Height * scale);
         }
 
         PointF ToImage(Point p)
@@ -108,6 +161,15 @@ namespace StillsAndReels
             base.OnMouseDown(e);
             if (e.Button == MouseButtons.Right) { DialogResult = DialogResult.Cancel; Close(); return; }
             if (e.Button != MouseButtons.Left) return;
+            if (shape == SnipShape.Window)
+            {
+                var r = WindowAt(e.Location);
+                ResultRect = r;
+                Result = source.Clone(r, PixelFormat.Format32bppArgb);
+                DialogResult = DialogResult.OK;
+                Close();
+                return;
+            }
             dragging = true;
             start = now = e.Location;
             lasso.Clear();
@@ -119,6 +181,7 @@ namespace StillsAndReels
         {
             base.OnMouseMove(e);
             now = e.Location;
+            mouseInside = true;
             if (dragging && shape == SnipShape.Freeform)
             {
                 var ip = ToImage(e.Location);
@@ -179,6 +242,12 @@ namespace StillsAndReels
             g.InterpolationMode = scale < 1 ? InterpolationMode.HighQualityBilinear : InterpolationMode.NearestNeighbor;
             g.DrawImage(source, imageRect);
 
+            if (shape == SnipShape.Window)
+            {
+                PaintWindowPick(g);
+                return;
+            }
+
             using (var shade = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
             using (var region = new Region(imageRect))
             {
@@ -216,6 +285,79 @@ namespace StillsAndReels
                 string msg = Purpose ?? (shape == SnipShape.Rectangle ? "Drag to snip a rectangle" : "Draw around the area to snip");
                 DrawBadge(g, msg + "   ·   Esc to cancel", new Point(-1, Theme.S(24)));
             }
+            if (fullScreen && mouseInside && shape == SnipShape.Rectangle) DrawLoupe(g);
+        }
+
+        void PaintWindowPick(Graphics g)
+        {
+            var p = Theme.Current;
+            RectangleF pick = mouseInside ? ToClient(WindowAt(now)) : RectangleF.Empty;
+            using (var shade = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+            using (var region = new Region(imageRect))
+            {
+                if (!pick.IsEmpty) region.Exclude(pick);
+                g.FillRegion(shade, region);
+            }
+            if (!pick.IsEmpty)
+            {
+                g.SmoothingMode = SmoothingMode.None;
+                float t = Theme.F(3);
+                using (var b = new LinearGradientBrush(ClientRectangle, p.AccentA, p.AccentB, 0f))
+                using (var pen = new Pen(b, t) { Alignment = PenAlignment.Inset })
+                    g.DrawRectangle(pen, pick.X, pick.Y, pick.Width - 1, pick.Height - 1);
+                var r = WindowAt(now);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                DrawBadge(g, r.Width + " × " + r.Height, new Point((int)pick.X + Theme.S(10), (int)pick.Y + Theme.S(10)));
+            }
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            DrawBadge(g, (Purpose ?? "Click a window to snip it") + "   ·   Esc to cancel", new Point(-1, Theme.S(24)));
+        }
+
+        /// <summary>A magnified view of the pixels under the pointer, for placing an edge exactly.</summary>
+        void DrawLoupe(Graphics g)
+        {
+            const int zoom = 6;
+            int cells = (Theme.S(126) / zoom) | 1;           // an odd number, so one pixel sits in the middle
+            int size = cells * zoom;
+            var ip = ToImage(now);
+            int cx = Math.Min(source.Width - 1, (int)ip.X), cy = Math.Min(source.Height - 1, (int)ip.Y);
+            int gap = Theme.S(22), textH = Theme.S(22);
+            int x = now.X + gap, y = now.Y + gap;
+            if (x + size > ClientSize.Width - 4) x = now.X - gap - size;
+            if (y + size + textH > ClientSize.Height - 4) y = now.Y - gap - size - textH;
+            var box = new Rectangle(x, y, size, size);
+
+            var state = g.Save();
+            g.SmoothingMode = SmoothingMode.None;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            using (var back = new SolidBrush(Color.Black)) g.FillRectangle(back, box);
+            // only the part of the neighbourhood that is inside the picture
+            var want = new Rectangle(cx - cells / 2, cy - cells / 2, cells, cells);
+            var have = want; have.Intersect(new Rectangle(0, 0, source.Width, source.Height));
+            if (have.Width > 0 && have.Height > 0)
+            {
+                var dst = new Rectangle(box.X + (have.X - want.X) * zoom, box.Y + (have.Y - want.Y) * zoom, have.Width * zoom, have.Height * zoom);
+                g.DrawImage(source, dst, have, GraphicsUnit.Pixel);
+            }
+            g.PixelOffsetMode = PixelOffsetMode.Default;
+            int mid = cells / 2 * zoom;
+            using (var line = new Pen(Color.FromArgb(150, 255, 255, 255), 1f))
+            {
+                g.DrawLine(line, box.X, box.Y + mid + zoom / 2, box.X + mid - 1, box.Y + mid + zoom / 2);
+                g.DrawLine(line, box.X + mid + zoom, box.Y + mid + zoom / 2, box.Right - 1, box.Y + mid + zoom / 2);
+                g.DrawLine(line, box.X + mid + zoom / 2, box.Y, box.X + mid + zoom / 2, box.Y + mid - 1);
+                g.DrawLine(line, box.X + mid + zoom / 2, box.Y + mid + zoom, box.X + mid + zoom / 2, box.Bottom - 1);
+            }
+            using (var cell = new Pen(Color.White, 1f)) g.DrawRectangle(cell, box.X + mid, box.Y + mid, zoom - 1, zoom - 1);
+            using (var b = new LinearGradientBrush(box, Theme.Current.AccentA, Theme.Current.AccentB, 0f))
+            using (var pen = new Pen(b, Theme.F(2))) g.DrawRectangle(pen, box.X - 1, box.Y - 1, box.Width + 1, box.Height + 1);
+            g.Restore(state);
+
+            var f = Theme.UiFont(9f);
+            var label = new Rectangle(box.X - 1, box.Bottom + 1, box.Width + 2, textH);
+            using (var b = new SolidBrush(Color.FromArgb(225, Theme.Current.OverlayBg))) g.FillRectangle(b, label);
+            TextRenderer.DrawText(g, (cx + screenOrigin.X) + ", " + (cy + screenOrigin.Y), f, label, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
         GraphicsPath ScreenPath()
@@ -269,7 +411,7 @@ namespace StillsAndReels
         readonly Dictionary<EditTool, Color> colors = new Dictionary<EditTool, Color>();
         readonly Dictionary<EditTool, int> sizes = new Dictionary<EditTool, int>();
 
-        ThemedButton bNew, bRect, bFree, bScreen, bPicture, bDelay, bPen, bHigh, bErase, bColor, bUndo, bRedo, bClear, bCopy, bSave, bSend;
+        ThemedButton bNew, bRect, bFree, bWin, bFull, bScreen, bPicture, bDelay, bMove, bPen, bHigh, bArrow, bBox, bText, bStep, bHide, bErase, bColor, bUndo, bRedo, bClear, bCopy, bSave, bSend;
         ThemedSlider sizeSlider;
 
         public SnipForm(Form host, Settings settings, Func<Bitmap> getPicture, Action<Bitmap> sendToEditor)
@@ -279,6 +421,13 @@ namespace StillsAndReels
             this.getPicture = getPicture;
             this.sendToEditor = sendToEditor;
             if (settings != null) delay = Array.IndexOf(Delays, settings.GetInt("Snip.Delay", 0)) >= 0 ? settings.GetInt("Snip.Delay", 0) : 0;
+            if (settings != null)
+            {
+                int m = settings.GetInt("Snip.Mode", 0);
+                if (Enum.IsDefined(typeof(SnipShape), m)) shape = (SnipShape)m;
+                canvas.Options.RedactPixelate = settings.GetBool("HidePixelate", true);
+                canvas.Options.FontName = settings.GetString("TextFont", "Segoe UI");
+            }
             Text = "Snip";
             // its own window in the taskbar: minimise and maximise it without touching the main window
             ShowInTaskbar = true;
@@ -291,7 +440,9 @@ namespace StillsAndReels
 
             colors[EditTool.Pen] = Color.FromArgb(255, 232, 17, 35);
             colors[EditTool.Highlighter] = Color.FromArgb(255, 255, 255, 0);
+            colors[EditTool.Line] = colors[EditTool.Text] = colors[EditTool.Step] = Color.FromArgb(255, 232, 17, 35);
             sizes[EditTool.Pen] = 4; sizes[EditTool.Highlighter] = 18; sizes[EditTool.Eraser] = 16;
+            sizes[EditTool.Line] = 4; sizes[EditTool.Text] = 22; sizes[EditTool.Step] = 14; sizes[EditTool.Redact] = 12; sizes[EditTool.Select] = 4;
 
             flow.Dock = DockStyle.Fill;
             flow.WrapContents = true;
@@ -302,20 +453,28 @@ namespace StillsAndReels
 
             bNew = Btn(Ico.Plus, "New snip", "Capture a new snip (Ctrl+N)", (s, e) => NewSnip(), 112);
             bNew.Primary = true;
-            bRect = Btn(Ico.RectSelect, null, "Rectangle snip", (s, e) => { shape = SnipShape.Rectangle; Sync(); }, 40);
-            bFree = Btn(Ico.Lasso, null, "Freeform snip", (s, e) => { shape = SnipShape.Freeform; Sync(); }, 40);
+            bRect = Btn(Ico.RectSelect, null, "Rectangle snip: drag a box. A magnifier shows the exact pixels; arrow keys move one pixel at a time", (s, e) => SetShape(SnipShape.Rectangle), 40);
+            bFree = Btn(Ico.Lasso, null, "Freeform snip: draw around any shape", (s, e) => SetShape(SnipShape.Freeform), 40);
+            bWin = Btn(Ico.Window, null, "Window snip: click a window to snip just that window", (s, e) => SetShape(SnipShape.Window), 40);
+            bFull = Btn(Ico.Screen, null, "Full-screen snip: the whole of the screen the pointer is on, straight away", (s, e) => SetShape(SnipShape.FullScreen), 40);
             Sep();
             bScreen = Btn(Ico.Screen, "Screen", "Snip from your screen", (s, e) => { fromScreen = true; Sync(); }, 92);
             bPicture = Btn(Ico.Picture, "Picture", "Snip from the picture open in Stills & Reels", (s, e) => { fromScreen = false; Sync(); }, 96);
             bDelay = Btn(Ico.Timer, "No delay", "Wait before snipping the screen, so you can open a menu or tooltip first", (s, e) => ShowDelays(), 104);
             Sep();
+            bMove = Btn(Ico.Pointer, null, "Select: click an arrow, box, number or text to move, resize or delete it", (s, e) => SelectTool(EditTool.Select), 40);
             bPen = Btn(Ico.Pen, null, "Pen", (s, e) => SelectTool(EditTool.Pen), 40);
             bHigh = Btn(Ico.Highlighter, null, "Highlighter", (s, e) => SelectTool(EditTool.Highlighter), 40);
+            bArrow = Btn(Ico.ArrowTool, null, "Arrow: drag from the tail to the point", (s, e) => SelectTool(EditTool.Arrow), 40);
+            bBox = Btn(Ico.RectTool, null, "Box: drag a rectangle around something", (s, e) => SelectTool(EditTool.Rect), 40);
+            bText = Btn(Ico.Text, null, "Text: click where it should go and type", (s, e) => SelectTool(EditTool.Text), 40);
+            bStep = Btn(Ico.StepTool, null, "Numbered step: each click places the next number", (s, e) => SelectTool(EditTool.Step), 40);
+            bHide = Btn(Ico.Redact, null, "Hide: drag over something private to pixelate it for good", (s, e) => SelectTool(EditTool.Redact), 40);
             bErase = Btn(Ico.Eraser, null, "Eraser – removes whole strokes", (s, e) => SelectTool(EditTool.Eraser), 40);
             bColor = Btn(Ico.None, null, "Ink colour", (s, e) => ShowColors(), 40);
             sizeSlider = new ThemedSlider { Minimum = 1, Maximum = 30, Width = Theme.S(96), Height = Theme.S(36), Margin = new Padding(Theme.S(2), Theme.S(2), Theme.S(2), Theme.S(2)) };
-            sizeSlider.ValueChanged += (s, e) => { sizes[tool] = sizeSlider.Value; ApplyTool(); };
-            Ui.Tip.SetToolTip(sizeSlider, "Stroke size");
+            sizeSlider.ValueChanged += (s, e) => { sizes[Key(tool)] = sizeSlider.Value; ApplyTool(); };
+            Ui.Tip.SetToolTip(sizeSlider, "Size");
             flow.Controls.Add(sizeSlider);
             Sep();
             bUndo = Btn(Ico.Undo, null, "Undo (Ctrl+Z)", (s, e) => { if (session != null) session.Undo(); }, 40);
@@ -330,11 +489,11 @@ namespace StillsAndReels
             canvas.Dock = DockStyle.Fill;
             canvas.EmptyIcon = Ico.Snip;
             canvas.EmptyTitle = "Snip part of your screen or picture";
-            canvas.EmptyDetail = "Choose Rectangle or Freeform, pick Screen or Picture, then press New snip.";
+            canvas.EmptyDetail = "Choose Rectangle, Freeform, Window or Full screen, pick Screen or Picture, then press New snip.";
             Controls.Add(canvas);
             Controls.Add(bar);
 
-            Bounds = SnipWindows.PlaceBeside(host, Theme.S(760), Theme.S(560));
+            Bounds = SnipWindows.PlaceBeside(host, Theme.S(980), Theme.S(640));
 
             delayTimer.Tick += (s, e) => DelayTick();
             Theme.Changed += OnTheme;
@@ -413,35 +572,61 @@ namespace StillsAndReels
 
         public bool HasSnip { get { return session != null; } }
 
+        /// <summary>Tools that share one colour and size (all the shapes).</summary>
+        static EditTool Key(EditTool t) { return t == EditTool.Arrow || t == EditTool.Rect || t == EditTool.RoundRect || t == EditTool.Ellipse ? EditTool.Line : t; }
+
+        void SetShape(SnipShape sh)
+        {
+            shape = sh;
+            if (settings != null) { settings.Set("Snip.Mode", (int)shape); try { settings.Save(); } catch { } }
+            Sync();
+        }
+
         void Sync()
         {
             bRect.Checked = shape == SnipShape.Rectangle;
             bFree.Checked = shape == SnipShape.Freeform;
+            bWin.Checked = shape == SnipShape.Window;
+            bFull.Checked = shape == SnipShape.FullScreen;
+            bWin.Enabled = fromScreen;      // a picture has no windows in it; it falls back to a rectangle
             bScreen.Checked = fromScreen;
             bPicture.Checked = !fromScreen;
             bDelay.Enabled = fromScreen;
             bDelay.Text = delay == 0 ? "No delay" : delay + " s delay";
             bDelay.Checked = fromScreen && delay > 0;
             bool has = session != null;
-            bPen.Enabled = bHigh.Enabled = bErase.Enabled = bColor.Enabled = sizeSlider.Enabled = has;
+            bool sizeMatters = tool != EditTool.Select;
+            bool colourMatters = tool != EditTool.Eraser && tool != EditTool.Redact && tool != EditTool.Select;
+            bMove.Enabled = bPen.Enabled = bHigh.Enabled = bArrow.Enabled = bBox.Enabled = bText.Enabled = bStep.Enabled = bHide.Enabled = bErase.Enabled = has;
+            bColor.Enabled = has;
+            sizeSlider.Enabled = has && sizeMatters;
+            bMove.Checked = has && tool == EditTool.Select;
             bPen.Checked = has && tool == EditTool.Pen;
             bHigh.Checked = has && tool == EditTool.Highlighter;
+            bArrow.Checked = has && tool == EditTool.Arrow;
+            bBox.Checked = has && tool == EditTool.Rect;
+            bText.Checked = has && tool == EditTool.Text;
+            bStep.Checked = has && tool == EditTool.Step;
+            bHide.Checked = has && tool == EditTool.Redact;
             bErase.Checked = has && tool == EditTool.Eraser;
-            bColor.Visible = tool != EditTool.Eraser;
+            bColor.Visible = colourMatters;
             Color c;
-            bColor.Swatch = colors.TryGetValue(tool, out c) ? c : (Color?)null;
+            bColor.Swatch = colors.TryGetValue(Key(tool), out c) ? c : (Color?)null;
             bColor.Invalidate();
             bUndo.Enabled = has && session.CanUndo;
             bRedo.Enabled = has && session.CanRedo;
             bClear.Enabled = has && session.HasInk;
             bCopy.Enabled = bSave.Enabled = bSend.Enabled = has;
-            sizeSlider.Maximum = tool == EditTool.Pen ? 30 : 60;
-            sizeSlider.SetSilently(sizes[tool]);
+            sizeSlider.Minimum = tool == EditTool.Text ? 8 : tool == EditTool.Redact ? 3 : tool == EditTool.Step ? 6 : 1;
+            sizeSlider.Maximum = tool == EditTool.Text ? 96 : tool == EditTool.Pen || Key(tool) == EditTool.Line ? 30 : 60;
+            sizeSlider.SetSilently(Math.Max(sizeSlider.Minimum, Math.Min(sizeSlider.Maximum, sizes[Key(tool)])));
+            Ui.Tip.SetToolTip(sizeSlider, tool == EditTool.Text ? "Text size" : tool == EditTool.Redact ? "How strongly it is hidden" : tool == EditTool.Step ? "Size of the number" : "Line thickness");
             Text = has ? "Snip – " + session.Size.Width + " × " + session.Size.Height + (session.IsDirty ? " *" : "") : "Snip";
         }
 
         void SelectTool(EditTool t)
         {
+            if (canvas.IsEditingText) canvas.EndTextEdit(true);
             tool = t;
             ApplyTool();
             Sync();
@@ -451,29 +636,33 @@ namespace StillsAndReels
         {
             canvas.Tool = tool;
             Color c;
-            canvas.ToolColor = colors.TryGetValue(tool, out c) ? c : Color.Black;
-            canvas.ToolSize = sizes[tool] * Theme.Scale;
+            canvas.ToolColor = colors.TryGetValue(Key(tool), out c) ? c : Color.Black;
+            int size = sizes[Key(tool)];
+            if (tool == EditTool.Redact) canvas.Options.RedactStrength = Math.Max(3, Math.Min(60, size));
+            canvas.ToolSize = size * Theme.Scale;
+            if (canvas.IsEditingText) canvas.RestyleTextBox();
             canvas.RefreshTool();
         }
 
         void ShowColors()
         {
-            if (tool == EditTool.Eraser) return;
+            if (tool == EditTool.Eraser || tool == EditTool.Redact || tool == EditTool.Select) return;
+            EditTool key = Key(tool);
             var menu = new ContextMenuStrip();
             var palette = tool == EditTool.Highlighter ? Palettes.Highlighter : Palettes.Ink;
             foreach (var kv in palette)
             {
                 var col = kv.Value;
-                var mi = new ToolStripMenuItem(kv.Key, Palettes.SwatchImage(col, Theme.S(16))) { Checked = col.ToArgb() == colors[tool].ToArgb() };
-                mi.Click += (s, e) => { colors[tool] = col; ApplyTool(); Sync(); };
+                var mi = new ToolStripMenuItem(kv.Key, Palettes.SwatchImage(col, Theme.S(16))) { Checked = col.ToArgb() == colors[key].ToArgb() };
+                mi.Click += (s, e) => { colors[key] = col; ApplyTool(); Sync(); };
                 menu.Items.Add(mi);
             }
             menu.Items.Add(new ToolStripSeparator());
             var more = new ToolStripMenuItem("More colours…");
             more.Click += (s, e) =>
             {
-                using (var dlg = new ColorDialog { Color = colors[tool], FullOpen = true })
-                    if (dlg.ShowDialog(this) == DialogResult.OK) { colors[tool] = Color.FromArgb(255, dlg.Color); ApplyTool(); Sync(); }
+                using (var dlg = new ColorDialog { Color = colors[key], FullOpen = true })
+                    if (dlg.ShowDialog(this) == DialogResult.OK) { colors[key] = Color.FromArgb(255, dlg.Color); ApplyTool(); Sync(); }
             };
             menu.Items.Add(more);
             menu.Closed += (s, e) => BeginInvoke((MethodInvoker)menu.Dispose);
@@ -547,6 +736,9 @@ namespace StillsAndReels
                 if (keyData == Keys.Escape) { CancelDelay(); return true; }
                 return base.ProcessCmdKey(ref msg, keyData);
             }
+            // while words are being typed onto the snip, the text box gets its own editing keys
+            if (canvas.IsEditingText && keyData != (Keys.Control | Keys.S) && keyData != (Keys.Control | Keys.E) && keyData != (Keys.Control | Keys.N))
+                return base.ProcessCmdKey(ref msg, keyData);
             switch (keyData)
             {
                 case Keys.Control | Keys.N: NewSnip(); return true;
@@ -585,11 +777,13 @@ namespace StillsAndReels
                         "Snip", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
-                using (pic)
-                using (var sel = new SnipSelector(pic, shape, false, Rectangle.Empty))
-                {
-                    if (sel.ShowDialog(this) == DialogResult.OK) result = sel.Result;
-                }
+                if (shape == SnipShape.FullScreen) result = pic;    // the whole picture
+                else
+                    using (pic)
+                    using (var sel = new SnipSelector(pic, shape == SnipShape.Freeform ? SnipShape.Freeform : SnipShape.Rectangle, false, Rectangle.Empty))
+                    {
+                        if (sel.ShowDialog(this) == DialogResult.OK) result = sel.Result;
+                    }
             }
             if (result == null) return;
             TakeSnip(result);
@@ -605,6 +799,7 @@ namespace StillsAndReels
         void SendToEditor()
         {
             if (session == null || sendToEditor == null) return;
+            Settle();
             sendToEditor(session.Flatten());
         }
 
@@ -632,9 +827,23 @@ namespace StillsAndReels
             try
             {
                 using (shot)
-                using (var sel = new SnipSelector(shot, shape, true, vs))
                 {
-                    return sel.ShowDialog() == DialogResult.OK ? sel.Result : null;
+                    if (shape == SnipShape.FullScreen)
+                    {
+                        // the whole of the screen the pointer is on, with nothing to drag
+                        var scr = Screen.FromPoint(Cursor.Position).Bounds;
+                        scr.Offset(-vs.X, -vs.Y);
+                        scr.Intersect(new Rectangle(0, 0, shot.Width, shot.Height));
+                        if (scr.Width < 1 || scr.Height < 1) scr = new Rectangle(0, 0, shot.Width, shot.Height);
+                        return shot.Clone(scr, PixelFormat.Format32bppArgb);
+                    }
+                    using (var sel = new SnipSelector(shot, shape, true, vs))
+                    {
+                        if (shape == SnipShape.Window)
+                            foreach (var w in ScreenWindows.List(Handle))
+                                sel.Windows.Add(new Rectangle(w.X - vs.X, w.Y - vs.Y, w.Width, w.Height));
+                        return sel.ShowDialog() == DialogResult.OK ? sel.Result : null;
+                    }
                 }
             }
             finally
@@ -642,6 +851,13 @@ namespace StillsAndReels
                 Opacity = myOpacity;
                 Activate();
             }
+        }
+
+        /// <summary>Finishes anything half-done on the snip (text being typed) before it is copied, saved or sent.</summary>
+        void Settle()
+        {
+            if (canvas.IsEditingText) canvas.EndTextEdit(true);
+            canvas.CommitPaste();
         }
 
         void SetSnip(Bitmap bmp)
@@ -662,6 +878,7 @@ namespace StillsAndReels
         bool CopySnip(bool quiet = false)
         {
             if (session == null) return false;
+            Settle();
             using (var bmp = session.Flatten())
             {
                 try
@@ -698,7 +915,9 @@ namespace StillsAndReels
                 if (dlg.ShowDialog(this) != DialogResult.OK) return false;
                 try
                 {
-                    using (var bmp = session.Flatten()) ImageSaver.Save(bmp, dlg.FileName);
+                    Settle();
+                    if (PicProject.IsProject(dlg.FileName)) PicProject.Save(session.State, dlg.FileName);   // keeps arrows and text editable
+                    else using (var bmp = session.Flatten()) ImageSaver.Save(bmp, dlg.FileName);
                     session.MarkSaved();
                     return true;
                 }
@@ -715,6 +934,54 @@ namespace StillsAndReels
             CancelDelay();
             if (e.CloseReason == CloseReason.UserClosing && !ConfirmDiscard()) { e.Cancel = true; return; }
             base.OnFormClosing(e);
+        }
+    }
+
+    /// <summary>The windows on the desktop, for window snips. Empty when not on Windows.</summary>
+    internal static class ScreenWindows
+    {
+        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+        delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong(IntPtr hWnd, int index);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int max);
+        [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out RECT value, int size);
+        [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attribute, out int value, int size);
+
+        /// <summary>Visible windows, front first, as desktop rectangles (the frame you see, without its invisible resize border).</summary>
+        public static List<Rectangle> List(IntPtr skip)
+        {
+            var found = new List<Rectangle>();
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return found;
+            try
+            {
+                EnumWindows((h, l) =>
+                {
+                    try
+                    {
+                        if (h == skip || !IsWindowVisible(h) || IsIconic(h)) return true;
+                        int ex = GetWindowLong(h, -20);
+                        if ((ex & 0x20) != 0) return true;                       // click-through overlays
+                        int cloaked;
+                        if (DwmGetWindowAttributeInt(h, 14, out cloaked, 4) == 0 && cloaked != 0) return true;   // hidden by Windows (other desktops, suspended apps)
+                        var name = new System.Text.StringBuilder(64);
+                        GetClassName(h, name, 64);
+                        string cls = name.ToString();
+                        if (cls == "Progman" || cls == "WorkerW") return true;   // the desktop itself: handled as "the whole screen"
+                        RECT r;
+                        if (DwmGetWindowAttribute(h, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0 && !GetWindowRect(h, out r)) return true;
+                        var rect = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+                        if (rect.Width >= 8 && rect.Height >= 8) found.Add(rect);
+                    }
+                    catch { }
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch { }
+            return found;
         }
     }
 
